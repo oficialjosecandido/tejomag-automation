@@ -1,0 +1,19 @@
+{
+  "short_name": "TejoMag",
+  "name": "TejoMag - Notícias Internacionais em Português",
+  "description": "Conecte-se com o mundo através das notícias internacionais traduzidas para português",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#1f6cac",
+  "background_color": "#f8fafc",
+  "orientation": "portrait-primary",
+  "categories": ["news", "lifestyle", "utilities"],
+  "lang": "pt"
+}
