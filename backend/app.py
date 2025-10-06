@@ -216,7 +216,167 @@ def scrape_article_content(url):
     
     return None
 
-def translate_to_portuguese(text):
+def scrape_le_monde_news():
+    """Scrape latest news from Le Monde"""
+    try:
+        url = 'https://www.lemonde.fr'
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Multiple selectors to find article links
+        selectors = [
+            'a[data-testid="internal-link"]',
+            'a[href*="/article/"]',
+            '.article__link',
+            '.teaser__link',
+            'article a[href*="/article/"]',
+            '.river__teaser a',
+            '.m-teaser a'
+        ]
+        
+        articles = []
+        seen_urls = set()
+        
+        for selector in selectors:
+            links = soup.select(selector)
+            print(f"Le Monde: Found {len(links)} links with selector: {selector}")
+            
+            for link in links[:10]:  # Limit to first 10 per selector
+                href = link.get('href')
+                if not href:
+                    continue
+                    
+                # Make URL absolute
+                if href.startswith('/'):
+                    href = f'https://www.lemonde.fr{href}'
+                elif not href.startswith('http'):
+                    continue
+                
+                # Skip if we've already seen this URL
+                if href in seen_urls:
+                    continue
+                seen_urls.add(href)
+                
+                # Skip non-article URLs
+                if '/article/' not in href or href.endswith('/lemonde.fr'):
+                    continue
+                
+                # Scrape article content
+                article = scrape_le_monde_article_content(href)
+                if article:
+                    articles.append(article)
+                    print(f"Successfully scraped Le Monde article: {article['title'][:50]}...")
+                    
+                    if len(articles) >= 3:  # Limit to 3 articles
+                        break
+            
+            if len(articles) >= 3:
+                break
+        
+        print(f"Le Monde total articles found: {len(articles)}")
+        return articles[:3]  # Return only first 3
+        
+    except Exception as e:
+        print(f"Error scraping Le Monde news: {e}")
+        return []
+
+def scrape_le_monde_article_content(url):
+    """Scrape individual Le Monde article content"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Extract title
+        title_selectors = [
+            'h1.article__title',
+            'h1[data-testid="headline"]',
+            'h1.article-title',
+            'h1'
+        ]
+        
+        title = None
+        for selector in title_selectors:
+            title_elem = soup.select_one(selector)
+            if title_elem and title_elem.get_text().strip():
+                title = title_elem.get_text().strip()
+                break
+        
+        if not title:
+            return None
+        
+        # Extract content
+        content_selectors = [
+            '.article__content p',
+            '.article__paragraph p',
+            'article p',
+            '.article-body p'
+        ]
+        
+        content_paragraphs = []
+        for selector in content_selectors:
+            paragraphs = soup.select(selector)
+            for p in paragraphs:
+                text = p.get_text().strip()
+                if len(text) > 50:  # Filter out short paragraphs
+                    content_paragraphs.append(text)
+            if content_paragraphs:
+                break
+        
+        if not content_paragraphs:
+            return None
+        
+        # Limit content to 8 paragraphs
+        content = ' '.join(content_paragraphs[:8])
+        
+        # Extract image
+        image_selectors = [
+            '.article__img img',
+            '.article__media img',
+            'article img',
+            '.article-image img',
+            'img[src*="lemonde.fr"]'
+        ]
+        
+        image_url = None
+        for selector in image_selectors:
+            img = soup.select_one(selector)
+            if img:
+                src = img.get('src') or img.get('data-src')
+                if src:
+                    if src.startswith('//'):
+                        src = 'https:' + src
+                    elif src.startswith('/'):
+                        src = f'https://www.lemonde.fr{src}'
+                    image_url = src
+                    break
+        
+        if title and content and len(content) > 100:
+            return {
+                'title': title,
+                'content': content,
+                'image_url': image_url,
+                'url': url,
+                'source': 'Le Monde'
+            }
+        
+    except Exception as e:
+        print(f"Error scraping Le Monde article {url}: {e}")
+    
+    return None
+
+def translate_to_portuguese(text, source_lang='en'):
     """Translate text to Portuguese with improved quality"""
     try:
         if not text or len(text.strip()) == 0:
@@ -225,31 +385,113 @@ def translate_to_portuguese(text):
         # Clean and prepare text for translation
         text = text.strip()
         
-        # Split long text into chunks for translation
-        if len(text) > 4500:  # Reduced chunk size for better quality
-            chunks = [text[i:i+4500] for i in range(0, len(text), 4500)]
+        # Remove extra whitespace and normalize
+        text = ' '.join(text.split())
+        
+        # Split long text into chunks for translation (smaller chunks = better quality)
+        if len(text) > 3000:  # Smaller chunks for better translation quality
+            chunks = [text[i:i+3000] for i in range(0, len(text), 3000)]
             translated_chunks = []
             for chunk in chunks:
                 try:
                     # Use Brazilian Portuguese for more natural translations
-                    result = translator.translate(chunk, dest='pt', src='en')
-                    translated_chunks.append(result.text)
-                    time.sleep(0.3)  # Reduced delay
+                    result = translator.translate(chunk, dest='pt', src=source_lang)
+                    translated_text = result.text
+                    
+                    # Post-process translation for better quality
+                    translated_text = post_process_translation(translated_text)
+                    translated_chunks.append(translated_text)
+                    time.sleep(0.5)  # Longer delay for better API response
                 except Exception as chunk_error:
                     print(f"Chunk translation error: {chunk_error}")
                     translated_chunks.append(chunk)
             return ' '.join(translated_chunks)
         else:
             # Use Brazilian Portuguese for more natural translations
-            result = translator.translate(text, dest='pt', src='en')
-            return result.text
+            result = translator.translate(text, dest='pt', src=source_lang)
+            translated_text = result.text
+            
+            # Post-process translation for better quality
+            translated_text = post_process_translation(translated_text)
+            return translated_text
     except Exception as e:
         print(f"Translation error: {e}")
+        return text
+
+def post_process_translation(text):
+    """Post-process translated text for better quality"""
+    try:
+        # Common corrections for better Portuguese
+        corrections = {
+            # Common mistranslations
+            'Estados Unidos': 'Estados Unidos',
+            'Reino Unido': 'Reino Unido',
+            'França': 'França',
+            'Alemanha': 'Alemanha',
+            'Rússia': 'Rússia',
+            'China': 'China',
+            'Japão': 'Japão',
+            
+            # Fix common Google Translate issues
+            'Sr.': 'Sr.',
+            'Sra.': 'Sra.',
+            'Dr.': 'Dr.',
+            'Dra.': 'Dra.',
+            'Prof.': 'Prof.',
+            'Prof.ª': 'Prof.ª',
+            
+            # Fix currency and numbers
+            '€': '€',
+            '$': '$',
+            '£': '£',
+            '¥': '¥',
+            
+            # Fix common abbreviations
+            'UE': 'UE',
+            'EUA': 'EUA',
+            'ONU': 'ONU',
+            'OTAN': 'OTAN',
+            'PIB': 'PIB',
+            'FMI': 'FMI',
+            'OMS': 'OMS',
+        }
+        
+        # Apply corrections
+        for wrong, correct in corrections.items():
+            text = text.replace(wrong, correct)
+        
+        # Capitalize first letter of sentences
+        sentences = text.split('. ')
+        corrected_sentences = []
+        for sentence in sentences:
+            if sentence.strip():
+                corrected_sentences.append(sentence[0].upper() + sentence[1:] if len(sentence) > 1 else sentence.upper())
+            else:
+                corrected_sentences.append(sentence)
+        
+        return '. '.join(corrected_sentences)
+        
+    except Exception as e:
+        print(f"Post-processing error: {e}")
         return text
 
 def detect_category(title, content):
     """Detect article category based on keywords - focused on specific topics"""
     text = f"{title} {content}".lower()
+    
+    # French keywords for Le Monde articles
+    french_keywords = {
+        'Política': ['président', 'gouvernement', 'ministre', 'élection', 'politique', 'parlement', 'assemblée', 'sénat', 'vote', 'candidat', 'parti', 'campagne', 'municipal', 'régional', 'national'],
+        'Economia': ['économie', 'économique', 'finance', 'financier', 'bourse', 'entreprise', 'emploi', 'chômage', 'croissance', 'crise', 'investissement', 'bancaire', 'fiscal', 'budget', 'déficit'],
+        'Tecnologia': ['technologie', 'technologique', 'numérique', 'digital', 'internet', 'réseaux sociaux', 'application', 'logiciel', 'intelligence artificielle', 'robot', 'innovation', 'start-up'],
+        'Saúde': ['santé', 'médical', 'hôpital', 'médecin', 'maladie', 'virus', 'épidémie', 'vaccin', 'traitement', 'thérapie', 'pharmaceutique'],
+        'Desporto': ['sport', 'sportif', 'football', 'rugby', 'tennis', 'cyclisme', 'jeux olympiques', 'championnat', 'équipe', 'joueur', 'match', 'compétition'],
+        'Cultura': ['culture', 'culturel', 'art', 'artistique', 'musée', 'théâtre', 'cinéma', 'livre', 'littérature', 'musique', 'festival', 'exposition'],
+        'Guerra e Conflitos': ['guerre', 'conflit', 'militaire', 'armée', 'soldat', 'bataille', 'combat', 'terrorisme', 'attentat', 'sécurité', 'défense'],
+        'Ambiente': ['environnement', 'environnemental', 'climat', 'écologie', 'pollution', 'énergie', 'recyclage', 'biodiversité', 'nature', 'vert'],
+        'Direitos Humanos': ['droits', 'humain', 'liberté', 'égalité', 'discrimination', 'refugié', 'migrant', 'asile', 'justice', 'tribunal'],
+        'Ciência': ['science', 'scientifique', 'recherche', 'étude', 'découverte', 'laboratoire', 'université', 'recherche', 'innovation', 'expérimentation']
+    }
     
     # Define category keywords - more specific and relevant categories
     categories = {
@@ -265,12 +507,22 @@ def detect_category(title, content):
         'Ciência': ['science', 'research', 'study', 'discovery', 'experiment', 'scientist', 'laboratory', 'space', 'earth', 'universe', 'physics', 'chemistry', 'biology']
     }
     
-    # Count keyword matches for each category
+    # Count keyword matches for each category (English)
     category_scores = {}
     for category, keywords in categories.items():
         score = sum(1 for keyword in keywords if keyword in text)
         if score > 0:
             category_scores[category] = score
+    
+    # Count keyword matches for each category (French)
+    for category, keywords in french_keywords.items():
+        score = sum(1 for keyword in keywords if keyword in text)
+        if score > 0:
+            # Add to existing score if category already exists
+            if category in category_scores:
+                category_scores[category] += score
+            else:
+                category_scores[category] = score
     
     # Return category with highest score, or 'Geral' if no matches
     if category_scores:
@@ -409,33 +661,53 @@ def scheduler_status():
         return jsonify({'error': str(e)}), 500
 
 def run_news_job():
-    """Background job to fetch and save latest news"""
+    """Background job to fetch and save latest news from multiple sources"""
     try:
         print(f"\n🔄 Running scheduled news job at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
-        # Scrape BBC news
-        articles = scrape_bbc_news()
+        all_articles = []
         
-        if not articles:
-            print("❌ No articles found in scheduled job")
+        # Scrape BBC news
+        print("📰 Scraping BBC News...")
+        bbc_articles = scrape_bbc_news()
+        if bbc_articles:
+            all_articles.extend(bbc_articles)
+            print(f"✅ Found {len(bbc_articles)} BBC articles")
+        else:
+            print("❌ No BBC articles found")
+        
+        # Scrape Le Monde news
+        print("📰 Scraping Le Monde...")
+        lemonde_articles = scrape_le_monde_news()
+        if lemonde_articles:
+            all_articles.extend(lemonde_articles)
+            print(f"✅ Found {len(lemonde_articles)} Le Monde articles")
+        else:
+            print("❌ No Le Monde articles found")
+        
+        if not all_articles:
+            print("❌ No articles found from any source")
             return
         
-        print(f"📰 Found {len(articles)} articles")
+        print(f"📰 Total articles found: {len(all_articles)}")
         
         # Process and save articles
         conn = sqlite3.connect('news.db')
         cursor = conn.cursor()
         
         processed_count = 0
-        for article in articles:
+        for article in all_articles:
             # Check if article already exists
             cursor.execute('SELECT id FROM articles WHERE url = ?', (article['url'],))
             existing = cursor.fetchone()
             
             if not existing:
+                # Determine source language for better translation
+                source_lang = 'fr' if article['source'] == 'Le Monde' else 'en'
+                
                 # Translate and store new article
-                title_pt = translate_to_portuguese(article['title'])
-                content_pt = translate_to_portuguese(article['content'])
+                title_pt = translate_to_portuguese(article['title'], source_lang)
+                content_pt = translate_to_portuguese(article['content'], source_lang)
                 
                 # Detect category
                 category = detect_category(article['title'], article['content'])
@@ -449,14 +721,14 @@ def run_news_job():
                       article.get('image_url'), article['url'], article['source'], category, now))
                 
                 processed_count += 1
-                print(f"✅ Added: {article['title'][:50]}...")
+                print(f"✅ Added {article['source']}: {article['title'][:50]}...")
             else:
                 print(f"⏭️  Skipped (already exists): {article['title'][:50]}...")
         
         conn.commit()
         conn.close()
         
-        print(f"🎉 Scheduled job completed: {processed_count} new articles added")
+        print(f"🎉 Scheduled job completed: {processed_count} new articles added from {len(set(article['source'] for article in all_articles))} sources")
         
     except Exception as e:
         print(f"❌ Error in scheduled job: {e}")
@@ -485,7 +757,7 @@ def setup_scheduler():
 if __name__ == '__main__':
     init_db()
     print("Starting News Translation API...")
-    print("API will be available at: http://localhost:5001")
+    print("API will be available at: http://localhost:5002")
     print("Endpoints:")
     print("  GET /api/health - Health check")
     print("  GET /api/news - Get latest translated news")
@@ -499,7 +771,7 @@ if __name__ == '__main__':
     setup_scheduler()
     
     try:
-        app.run(debug=True, host='0.0.0.0', port=5001)
+        app.run(debug=True, host='0.0.0.0', port=5002)
     except KeyboardInterrupt:
         print("\n🛑 Shutting down TejoMag...")
         print("Goodbye! 👋")
