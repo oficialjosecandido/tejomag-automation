@@ -7,6 +7,9 @@ import sqlite3
 import os
 from datetime import datetime
 import time
+import schedule
+import threading
+import atexit
 
 app = Flask(__name__)
 CORS(app)
@@ -438,6 +441,114 @@ def get_news_by_category(category):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/news/refresh', methods=['POST'])
+def refresh_news():
+    """Manually trigger news refresh"""
+    try:
+        print("🔄 Manual news refresh requested")
+        run_news_job()
+        return jsonify({
+            'message': 'News refresh completed',
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/scheduler/status', methods=['GET'])
+def scheduler_status():
+    """Get scheduler status and next run time"""
+    try:
+        jobs = schedule.get_jobs()
+        job_info = []
+        for job in jobs:
+            job_info.append({
+                'job': str(job.job_func),
+                'next_run': job.next_run.isoformat() if job.next_run else None,
+                'interval': str(job.interval)
+            })
+        
+        return jsonify({
+            'status': 'running',
+            'jobs': job_info,
+            'total_jobs': len(jobs)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+def run_news_job():
+    """Background job to fetch and save latest news"""
+    try:
+        print(f"\n🔄 Running scheduled news job at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # Scrape BBC news
+        articles = scrape_bbc_news()
+        
+        if not articles:
+            print("❌ No articles found in scheduled job")
+            return
+        
+        print(f"📰 Found {len(articles)} articles")
+        
+        # Process and save articles
+        conn = sqlite3.connect('news.db')
+        cursor = conn.cursor()
+        
+        processed_count = 0
+        for article in articles:
+            # Check if article already exists
+            cursor.execute('SELECT id FROM articles WHERE url = ?', (article['url'],))
+            existing = cursor.fetchone()
+            
+            if not existing:
+                # Translate and store new article
+                title_pt = translate_to_portuguese(article['title'])
+                content_pt = translate_to_portuguese(article['content'])
+                
+                # Detect category
+                category = detect_category(article['title'], article['content'])
+                
+                now = datetime.now().isoformat()
+                
+                cursor.execute('''
+                    INSERT INTO articles (title, title_pt, content, content_pt, image_url, url, source, category, scraped_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (article['title'], title_pt, article['content'], content_pt, 
+                      article.get('image_url'), article['url'], article['source'], category, now))
+                
+                processed_count += 1
+                print(f"✅ Added: {article['title'][:50]}...")
+            else:
+                print(f"⏭️  Skipped (already exists): {article['title'][:50]}...")
+        
+        conn.commit()
+        conn.close()
+        
+        print(f"🎉 Scheduled job completed: {processed_count} new articles added")
+        
+    except Exception as e:
+        print(f"❌ Error in scheduled job: {e}")
+
+def run_scheduler():
+    """Run the scheduler in a separate thread"""
+    while True:
+        schedule.run_pending()
+        time.sleep(60)  # Check every minute
+
+def setup_scheduler():
+    """Setup the scheduled jobs"""
+    # Schedule news job to run every hour
+    schedule.every().hour.do(run_news_job)
+    
+    # Also run immediately on startup
+    print("🚀 Running initial news fetch...")
+    run_news_job()
+    
+    # Start scheduler in background thread
+    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+    scheduler_thread.start()
+    
+    print("⏰ Scheduler started - news will be fetched every hour")
+
 if __name__ == '__main__':
     init_db()
     print("Starting News Translation API...")
@@ -447,4 +558,15 @@ if __name__ == '__main__':
     print("  GET /api/news - Get latest translated news")
     print("  GET /api/news/categories - Get available categories")
     print("  GET /api/news/category/<category> - Get news by category")
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    print("  POST /api/news/refresh - Manually refresh news")
+    print("  GET /api/scheduler/status - Check scheduler status")
+    print()
+    
+    # Setup the scheduler for automatic news fetching
+    setup_scheduler()
+    
+    try:
+        app.run(debug=True, host='0.0.0.0', port=5001)
+    except KeyboardInterrupt:
+        print("\n🛑 Shutting down TejoMag...")
+        print("Goodbye! 👋")

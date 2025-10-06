@@ -110,6 +110,29 @@ A aplicação estará disponível em `http://localhost:3001`
 - `GET /api/news` - Obter todas as notícias
 - `GET /api/news/categories` - Obter categorias disponíveis
 - `GET /api/news/category/<category>` - Obter notícias por categoria
+- `POST /api/news/refresh` - Atualizar notícias manualmente
+- `GET /api/scheduler/status` - Verificar status do agendador
+
+## ⏰ Sistema de Agendamento Automático
+
+TejoMag inclui um sistema automático que busca notícias a cada hora:
+
+### Funcionalidades:
+- **Busca Automática**: Coleta as 3 notícias mais recentes da BBC a cada hora
+- **Tradução Automática**: Traduz automaticamente para português
+- **Categorização**: Classifica automaticamente as notícias
+- **Prevenção de Duplicatas**: Evita salvar notícias já existentes
+- **Logs Detalhados**: Mostra o progresso de cada execução
+
+### Executar Separadamente:
+```bash
+# Executar apenas o agendador (sem servidor web)
+cd backend
+python scheduler.py
+
+# Testar o agendador uma vez
+python test_scheduler.py
+```
 
 ## 🏷️ Categorias Disponíveis
 
