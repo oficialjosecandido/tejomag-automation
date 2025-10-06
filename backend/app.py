@@ -279,108 +279,41 @@ def detect_category(title, content):
 
 @app.route('/api/news', methods=['GET'])
 def get_news():
-    """Get latest news articles"""
+    """Get latest news articles from database"""
     try:
-        # Scrape BBC news
-        articles = scrape_bbc_news()
+        conn = sqlite3.connect('news.db')
+        cursor = conn.cursor()
         
-        if not articles:
-            return jsonify({'error': 'No articles found'}), 500
+        # Get all articles from database, ordered by most recent first
+        cursor.execute('''
+            SELECT id, title, title_pt, content, content_pt, image_url, url, source, category, published_date, scraped_at
+            FROM articles 
+            ORDER BY scraped_at DESC
+        ''')
         
-        # Process and store articles
-        processed_articles = []
+        articles = cursor.fetchall()
+        conn.close()
         
+        # Convert to list of dictionaries
+        article_list = []
         for article in articles:
-            # Check if article already exists
-            conn = sqlite3.connect('news.db')
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM articles WHERE url = ?', (article['url'],))
-            existing = cursor.fetchone()
-            
-            if existing:
-                # Return existing article - handle schema versions
-                if len(existing) >= 10:  # New schema with category
-                    article_data = {
-                        'id': existing[0],
-                        'title': existing[1],
-                        'title_pt': existing[2],
-                        'content': existing[3],
-                        'content_pt': existing[4],
-                        'image_url': existing[5],
-                        'url': existing[6],
-                        'source': existing[7],
-                        'category': existing[8],
-                        'published_date': existing[9],
-                        'scraped_at': existing[10]
-                    }
-                elif len(existing) >= 9:  # Schema with image_url but no category
-                    article_data = {
-                        'id': existing[0],
-                        'title': existing[1],
-                        'title_pt': existing[2],
-                        'content': existing[3],
-                        'content_pt': existing[4],
-                        'image_url': existing[5],
-                        'url': existing[6],
-                        'source': existing[7],
-                        'category': 'Geral',  # Default category
-                        'published_date': existing[8],
-                        'scraped_at': existing[9]
-                    }
-                else:  # Old schema without image_url and category
-                    article_data = {
-                        'id': existing[0],
-                        'title': existing[1],
-                        'title_pt': existing[2],
-                        'content': existing[3],
-                        'content_pt': existing[4],
-                        'image_url': None,
-                        'url': existing[5],
-                        'source': existing[6],
-                        'category': 'Geral',  # Default category
-                        'published_date': existing[7],
-                        'scraped_at': existing[8]
-                    }
-                
-                processed_articles.append(article_data)
-            else:
-                # Translate and store new article
-                title_pt = translate_to_portuguese(article['title'])
-                content_pt = translate_to_portuguese(article['content'])
-                
-                # Detect category
-                category = detect_category(article['title'], article['content'])
-                
-                now = datetime.now().isoformat()
-                
-                cursor.execute('''
-                    INSERT INTO articles (title, title_pt, content, content_pt, image_url, url, source, category, scraped_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (article['title'], title_pt, article['content'], content_pt, 
-                      article.get('image_url'), article['url'], article['source'], category, now))
-                
-                conn.commit()
-                article_id = cursor.lastrowid
-                
-                processed_articles.append({
-                    'id': article_id,
-                    'title': article['title'],
-                    'title_pt': title_pt,
-                    'content': article['content'],
-                    'content_pt': content_pt,
-                    'image_url': article.get('image_url'),
-                    'url': article['url'],
-                    'source': article['source'],
-                    'category': category,
-                    'published_date': None,
-                    'scraped_at': now
-                })
-            
-            conn.close()
+            article_list.append({
+                'id': article[0],
+                'title': article[1],
+                'title_pt': article[2],
+                'content': article[3],
+                'content_pt': article[4],
+                'image_url': article[5],
+                'url': article[6],
+                'source': article[7],
+                'category': article[8],
+                'published_date': article[9],
+                'scraped_at': article[10]
+            })
         
         return jsonify({
-            'articles': processed_articles,
-            'count': len(processed_articles)
+            'articles': article_list,
+            'count': len(article_list)
         })
         
     except Exception as e:
