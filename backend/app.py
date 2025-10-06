@@ -29,6 +29,8 @@ def init_db():
             content TEXT NOT NULL,
             content_pt TEXT NOT NULL,
             image_url TEXT,
+            images TEXT,
+            slug TEXT UNIQUE,
             url TEXT NOT NULL,
             source TEXT NOT NULL,
             category TEXT DEFAULT 'Geral',
@@ -37,8 +39,41 @@ def init_db():
             UNIQUE(url)
         )
     ''')
+    
+    # Add slug column to existing tables if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE articles ADD COLUMN slug TEXT')
+    except:
+        pass
+    
+    # Add images column to existing tables if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE articles ADD COLUMN images TEXT')
+    except:
+        pass
+    
     conn.commit()
     conn.close()
+
+def generate_slug(title):
+    """Generate a URL-friendly slug from article title"""
+    import re
+    import unicodedata
+    
+    # Normalize unicode characters
+    slug = unicodedata.normalize('NFKD', title)
+    slug = slug.encode('ascii', 'ignore').decode('ascii')
+    
+    # Convert to lowercase and replace spaces with hyphens
+    slug = slug.lower()
+    slug = re.sub(r'[^\w\s-]', '', slug)
+    slug = re.sub(r'[-\s]+', '-', slug)
+    slug = slug.strip('-')
+    
+    # Limit length
+    slug = slug[:100]
+    
+    return slug
 
 def scrape_bbc_news():
     """Scrape the latest 3 news articles from BBC"""
@@ -172,10 +207,10 @@ def scrape_article_content(url):
                 seen.add(part)
                 unique_content.append(part)
         
-        content = ' '.join(unique_content[:8])  # Limit to first 8 paragraphs
+        # Get more content - increase from 8 to 20 paragraphs for full text
+        content = ' '.join(unique_content[:20])
         
-        # Extract article image
-        image_url = None
+        # Extract ALL article images (not just the main one)
         image_selectors = [
             '[data-testid="story-image"] img',
             '.story-image img',
@@ -187,7 +222,10 @@ def scrape_article_content(url):
             'img[data-src*="ichef.bbci.co.uk"]'
         ]
         
-        # Try to find the main article image (not placeholder)
+        image_url = None
+        all_images = []
+        
+        # Try to find all article images (not placeholders)
         for selector in image_selectors:
             img_elems = soup.select(selector)
             for img_elem in img_elems:
@@ -197,16 +235,21 @@ def scrape_article_content(url):
                         src = 'https:' + src
                     elif src.startswith('/'):
                         src = 'https://www.bbc.com' + src
-                    image_url = src
-                    break
-            if image_url:
-                break
+                    
+                    # Avoid duplicates
+                    if src not in all_images:
+                        all_images.append(src)
+                        
+                        # Set the first image as the main image
+                        if image_url is None:
+                            image_url = src
         
         if title and content and len(content) > 100:
             return {
                 'title': title,
                 'content': content,
                 'image_url': image_url,
+                'images': all_images,  # Store all images
                 'url': url,
                 'source': 'BBC'
             }
@@ -337,10 +380,10 @@ def scrape_le_monde_article_content(url):
         if not content_paragraphs:
             return None
         
-        # Limit content to 8 paragraphs
-        content = ' '.join(content_paragraphs[:8])
+        # Get more content - increase from 8 to 20 paragraphs for full text
+        content = ' '.join(content_paragraphs[:20])
         
-        # Extract image
+        # Extract ALL images
         image_selectors = [
             '.article__img img',
             '.article__media img',
@@ -350,23 +393,32 @@ def scrape_le_monde_article_content(url):
         ]
         
         image_url = None
+        all_images = []
+        
         for selector in image_selectors:
-            img = soup.select_one(selector)
-            if img:
+            imgs = soup.select(selector)
+            for img in imgs:
                 src = img.get('src') or img.get('data-src')
-                if src:
+                if src and 'placeholder' not in src.lower():
                     if src.startswith('//'):
                         src = 'https:' + src
                     elif src.startswith('/'):
                         src = f'https://www.lemonde.fr{src}'
-                    image_url = src
-                    break
+                    
+                    # Avoid duplicates
+                    if src not in all_images:
+                        all_images.append(src)
+                        
+                        # Set the first image as the main image
+                        if image_url is None:
+                            image_url = src
         
         if title and content and len(content) > 100:
             return {
                 'title': title,
                 'content': content,
                 'image_url': image_url,
+                'images': all_images,  # Store all images
                 'url': url,
                 'source': 'Le Monde'
             }
@@ -538,7 +590,7 @@ def get_news():
         
         # Get all articles from database, ordered by most recent first
         cursor.execute('''
-            SELECT id, title, title_pt, content, content_pt, image_url, url, source, category, published_date, scraped_at
+            SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
             FROM articles 
             ORDER BY scraped_at DESC
         ''')
@@ -549,6 +601,14 @@ def get_news():
         # Convert to list of dictionaries
         article_list = []
         for article in articles:
+            import json
+            images = []
+            try:
+                if article[6]:  # images column
+                    images = json.loads(article[6])
+            except:
+                pass
+                
             article_list.append({
                 'id': article[0],
                 'title': article[1],
@@ -556,11 +616,13 @@ def get_news():
                 'content': article[3],
                 'content_pt': article[4],
                 'image_url': article[5],
-                'url': article[6],
-                'source': article[7],
-                'category': article[8],
-                'published_date': article[9],
-                'scraped_at': article[10]
+                'images': images,
+                'slug': article[7],
+                'url': article[8],
+                'source': article[9],
+                'category': article[10],
+                'published_date': article[11],
+                'scraped_at': article[12]
             })
         
         return jsonify({
@@ -591,7 +653,7 @@ def get_news_by_category(category):
         
         # Get articles from the specified category
         cursor.execute('''
-            SELECT id, title, title_pt, content, content_pt, image_url, url, source, category, published_date, scraped_at
+            SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
             FROM articles 
             WHERE category = ? 
             ORDER BY scraped_at DESC
@@ -603,6 +665,14 @@ def get_news_by_category(category):
         # Convert to list of dictionaries
         article_list = []
         for article in articles:
+            import json
+            images = []
+            try:
+                if article[6]:  # images column
+                    images = json.loads(article[6])
+            except:
+                pass
+                
             article_list.append({
                 'id': article[0],
                 'title': article[1],
@@ -610,11 +680,13 @@ def get_news_by_category(category):
                 'content': article[3],
                 'content_pt': article[4],
                 'image_url': article[5],
-                'url': article[6],
-                'source': article[7],
-                'category': article[8],
-                'published_date': article[9],
-                'scraped_at': article[10]
+                'images': images,
+                'slug': article[7],
+                'url': article[8],
+                'source': article[9],
+                'category': article[10],
+                'published_date': article[11],
+                'scraped_at': article[12]
             })
         
         return jsonify({
@@ -622,6 +694,55 @@ def get_news_by_category(category):
             'category': category,
             'count': len(article_list)
         })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/news/slug/<slug>', methods=['GET'])
+def get_news_by_slug(slug):
+    """Get a single article by slug"""
+    try:
+        conn = sqlite3.connect('news.db')
+        cursor = conn.cursor()
+        
+        # Get article by slug
+        cursor.execute('''
+            SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
+            FROM articles 
+            WHERE slug = ?
+        ''', (slug,))
+        
+        article = cursor.fetchone()
+        conn.close()
+        
+        if not article:
+            return jsonify({'error': 'Article not found'}), 404
+        
+        import json
+        images = []
+        try:
+            if article[6]:  # images column
+                images = json.loads(article[6])
+        except:
+            pass
+        
+        article_dict = {
+            'id': article[0],
+            'title': article[1],
+            'title_pt': article[2],
+            'content': article[3],
+            'content_pt': article[4],
+            'image_url': article[5],
+            'images': images,
+            'slug': article[7],
+            'url': article[8],
+            'source': article[9],
+            'category': article[10],
+            'published_date': article[11],
+            'scraped_at': article[12]
+        }
+        
+        return jsonify(article_dict)
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -712,16 +833,33 @@ def run_news_job():
                 # Detect category
                 category = detect_category(article['title'], article['content'])
                 
+                # Generate slug from title
+                slug = generate_slug(article['title'])
+                
+                # Ensure slug is unique
+                counter = 1
+                original_slug = slug
+                while True:
+                    cursor.execute('SELECT id FROM articles WHERE slug = ?', (slug,))
+                    if not cursor.fetchone():
+                        break
+                    slug = f"{original_slug}-{counter}"
+                    counter += 1
+                
+                # Convert images list to JSON
+                import json
+                images_json = json.dumps(article.get('images', []))
+                
                 now = datetime.now().isoformat()
                 
                 cursor.execute('''
-                    INSERT INTO articles (title, title_pt, content, content_pt, image_url, url, source, category, scraped_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO articles (title, title_pt, content, content_pt, image_url, images, slug, url, source, category, scraped_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (article['title'], title_pt, article['content'], content_pt, 
-                      article.get('image_url'), article['url'], article['source'], category, now))
+                      article.get('image_url'), images_json, slug, article['url'], article['source'], category, now))
                 
                 processed_count += 1
-                print(f"✅ Added {article['source']}: {article['title'][:50]}...")
+                print(f"✅ Added {article['source']}: {article['title'][:50]}... (slug: {slug})")
             else:
                 print(f"⏭️  Skipped (already exists): {article['title'][:50]}...")
         

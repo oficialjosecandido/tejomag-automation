@@ -9,14 +9,25 @@ import sqlite3
 from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
-from googletrans import Translator
+import deepl
 import time
 import schedule
 import threading
 import atexit
+import os
 
-# Initialize translator
-translator = Translator()
+# Initialize DeepL translator
+DEEPL_API_KEY = os.getenv('DEEPL_API_KEY', '')
+translator = None
+
+if DEEPL_API_KEY:
+    try:
+        translator = deepl.Translator(DEEPL_API_KEY)
+        print("✅ DeepL translator initialized")
+    except Exception as e:
+        print(f"⚠️  DeepL initialization failed: {e}")
+else:
+    print("⚠️  No DEEPL_API_KEY found. Translation will not work.")
 
 def init_db():
     """Initialize the database"""
@@ -30,6 +41,8 @@ def init_db():
             content TEXT NOT NULL,
             content_pt TEXT NOT NULL,
             image_url TEXT,
+            images TEXT,
+            slug TEXT UNIQUE,
             url TEXT NOT NULL,
             source TEXT NOT NULL,
             category TEXT DEFAULT 'Geral',
@@ -38,8 +51,41 @@ def init_db():
             UNIQUE(url)
         )
     ''')
+    
+    # Add slug column to existing tables if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE articles ADD COLUMN slug TEXT')
+    except:
+        pass
+    
+    # Add images column to existing tables if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE articles ADD COLUMN images TEXT')
+    except:
+        pass
+    
     conn.commit()
     conn.close()
+
+def generate_slug(title):
+    """Generate a URL-friendly slug from article title"""
+    import re
+    import unicodedata
+    
+    # Normalize unicode characters
+    slug = unicodedata.normalize('NFKD', title)
+    slug = slug.encode('ascii', 'ignore').decode('ascii')
+    
+    # Convert to lowercase and replace spaces with hyphens
+    slug = slug.lower()
+    slug = re.sub(r'[^\w\s-]', '', slug)
+    slug = re.sub(r'[-\s]+', '-', slug)
+    slug = slug.strip('-')
+    
+    # Limit length
+    slug = slug[:100]
+    
+    return slug
 
 def scrape_bbc_news():
     """Scrape latest news from BBC"""
@@ -162,10 +208,10 @@ def scrape_article_content(url):
         if not content_paragraphs:
             return None
         
-        # Limit content to 8 paragraphs
-        content = ' '.join(content_paragraphs[:8])
+        # Get more content - increase from 8 to 20 paragraphs for full text
+        content = ' '.join(content_paragraphs[:20])
         
-        # Extract image
+        # Extract ALL images
         image_selectors = [
             '[data-testid="story-image"] img',
             '.story-image img',
@@ -178,23 +224,32 @@ def scrape_article_content(url):
         ]
         
         image_url = None
+        all_images = []
+        
         for selector in image_selectors:
-            img = soup.select_one(selector)
-            if img:
+            imgs = soup.select(selector)
+            for img in imgs:
                 src = img.get('src') or img.get('data-src')
-                if src and 'grey-placeholder' not in src:
+                if src and 'grey-placeholder' not in src and 'placeholder' not in src.lower():
                     if src.startswith('//'):
                         src = 'https:' + src
                     elif src.startswith('/'):
                         src = f'https://www.bbc.com{src}'
-                    image_url = src
-                    break
+                    
+                    # Avoid duplicates
+                    if src not in all_images:
+                        all_images.append(src)
+                        
+                        # Set the first image as the main image
+                        if image_url is None:
+                            image_url = src
         
         if title and content and len(content) > 100:
             return {
                 'title': title,
                 'content': content,
                 'image_url': image_url,
+                'images': all_images,
                 'url': url,
                 'source': 'BBC'
             }
@@ -204,33 +259,49 @@ def scrape_article_content(url):
     
     return None
 
-def translate_to_portuguese(text):
-    """Translate text to Portuguese with improved quality"""
+def translate_to_portuguese(text, source_lang='en'):
+    """Translate text to Portuguese using DeepL"""
     try:
         if not text or len(text.strip()) == 0:
             return text
         
-        # Clean and prepare text for translation
-        text = text.strip()
+        if not translator:
+            print("⚠️  Translator not initialized, returning original text")
+            return text
         
-        # Split long text into chunks for translation
-        if len(text) > 4500:
-            chunks = [text[i:i+4500] for i in range(0, len(text), 4500)]
+        text = text.strip()
+        text = ' '.join(text.split())
+        
+        source_lang_map = {
+            'en': 'EN',
+            'fr': 'FR'
+        }
+        source = source_lang_map.get(source_lang.lower(), 'EN')
+        
+        if len(text) > 5000:
+            chunks = [text[i:i+5000] for i in range(0, len(text), 5000)]
             translated_chunks = []
             for chunk in chunks:
                 try:
-                    # Use Brazilian Portuguese for more natural translations
-                    result = translator.translate(chunk, dest='pt', src='en')
+                    result = translator.translate_text(
+                        chunk, 
+                        source_lang=source,
+                        target_lang='PT-PT'
+                    )
                     translated_chunks.append(result.text)
-                    time.sleep(0.3)  # Reduced delay
+                    time.sleep(0.3)
                 except Exception as chunk_error:
                     print(f"Chunk translation error: {chunk_error}")
                     translated_chunks.append(chunk)
             return ' '.join(translated_chunks)
         else:
-            # Use Brazilian Portuguese for more natural translations
-            result = translator.translate(text, dest='pt', src='en')
+            result = translator.translate_text(
+                text,
+                source_lang=source,
+                target_lang='PT-PT'
+            )
             return result.text
+            
     except Exception as e:
         print(f"Translation error: {e}")
         return text
@@ -290,23 +361,43 @@ def run_news_job():
             existing = cursor.fetchone()
             
             if not existing:
+                # Determine source language for better translation
+                source_lang = 'fr' if article['source'] == 'Le Monde' else 'en'
+                
                 # Translate and store new article
-                title_pt = translate_to_portuguese(article['title'])
-                content_pt = translate_to_portuguese(article['content'])
+                title_pt = translate_to_portuguese(article['title'], source_lang)
+                content_pt = translate_to_portuguese(article['content'], source_lang)
                 
                 # Detect category
                 category = detect_category(article['title'], article['content'])
                 
+                # Generate slug from Portuguese title (better for SEO)
+                slug = generate_slug(title_pt)
+                
+                # Ensure slug is unique
+                counter = 1
+                original_slug = slug
+                while True:
+                    cursor.execute('SELECT id FROM articles WHERE slug = ?', (slug,))
+                    if not cursor.fetchone():
+                        break
+                    slug = f"{original_slug}-{counter}"
+                    counter += 1
+                
+                # Convert images list to JSON
+                import json
+                images_json = json.dumps(article.get('images', []))
+                
                 now = datetime.now().isoformat()
                 
                 cursor.execute('''
-                    INSERT INTO articles (title, title_pt, content, content_pt, image_url, url, source, category, scraped_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO articles (title, title_pt, content, content_pt, image_url, images, slug, url, source, category, scraped_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (article['title'], title_pt, article['content'], content_pt, 
-                      article.get('image_url'), article['url'], article['source'], category, now))
+                      article.get('image_url'), images_json, slug, article['url'], article['source'], category, now))
                 
                 processed_count += 1
-                print(f"✅ Added: {article['title'][:50]}...")
+                print(f"✅ Added: {article['title'][:50]}... (slug: {slug})")
             else:
                 print(f"⏭️  Skipped (already exists): {article['title'][:50]}...")
         

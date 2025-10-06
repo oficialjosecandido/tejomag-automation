@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import axios from 'axios';
 
 const ArticleDetailPage = () => {
-  const { id } = useParams();
+  const { slug } = useParams();
   const [article, setArticle] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -12,16 +12,22 @@ const ArticleDetailPage = () => {
   useEffect(() => {
     const fetchArticle = async () => {
       try {
-        // Since we don't have an individual article endpoint, we'll fetch all articles
-        // and find the one with the matching ID
-        const response = await axios.get('/api/news');
-        const articles = response.data.articles || [];
-        const foundArticle = articles.find(a => a.id.toString() === id);
-        
-        if (foundArticle) {
-          setArticle(foundArticle);
-        } else {
-          setError('Artigo não encontrado');
+        // Try to fetch by slug first
+        let response;
+        try {
+          response = await axios.get(`/api/news/slug/${slug}`);
+          setArticle(response.data);
+        } catch (slugError) {
+          // If slug fails, try as ID (for backward compatibility)
+          const allResponse = await axios.get('/api/news');
+          const articles = allResponse.data.articles || [];
+          const foundArticle = articles.find(a => a.id.toString() === slug);
+          
+          if (foundArticle) {
+            setArticle(foundArticle);
+          } else {
+            setError('Artigo não encontrado');
+          }
         }
       } catch (err) {
         console.error('Error fetching article:', err);
@@ -32,7 +38,107 @@ const ArticleDetailPage = () => {
     };
 
     fetchArticle();
-  }, [id]);
+  }, [slug]);
+
+  // SEO: Update document title and meta tags when article loads
+  useEffect(() => {
+    if (article) {
+      // Update page title
+      document.title = `${article.title_pt || article.title} | TejoMag`;
+      
+      // Update or create meta description
+      const metaDescription = document.querySelector('meta[name="description"]');
+      const description = (article.content_pt || article.content).substring(0, 160) + '...';
+      if (metaDescription) {
+        metaDescription.setAttribute('content', description);
+      } else {
+        const meta = document.createElement('meta');
+        meta.name = 'description';
+        meta.content = description;
+        document.head.appendChild(meta);
+      }
+
+      // Add Open Graph tags for social sharing
+      updateMetaTag('og:title', article.title_pt || article.title);
+      updateMetaTag('og:description', description);
+      updateMetaTag('og:image', article.image_url);
+      updateMetaTag('og:url', window.location.href);
+      updateMetaTag('og:type', 'article');
+      
+      // Add Twitter Card tags
+      updateMetaTag('twitter:card', 'summary_large_image');
+      updateMetaTag('twitter:title', article.title_pt || article.title);
+      updateMetaTag('twitter:description', description);
+      updateMetaTag('twitter:image', article.image_url);
+
+      // Add JSON-LD structured data
+      addStructuredData(article);
+    }
+  }, [article]);
+
+  const updateMetaTag = (property, content) => {
+    if (!content) return;
+    
+    let meta = document.querySelector(`meta[property="${property}"]`);
+    if (!meta) {
+      meta = document.querySelector(`meta[name="${property}"]`);
+    }
+    
+    if (meta) {
+      meta.setAttribute('content', content);
+    } else {
+      meta = document.createElement('meta');
+      if (property.startsWith('og:') || property.startsWith('twitter:')) {
+        meta.setAttribute('property', property);
+      } else {
+        meta.setAttribute('name', property);
+      }
+      meta.setAttribute('content', content);
+      document.head.appendChild(meta);
+    }
+  };
+
+  const addStructuredData = (article) => {
+    // Remove existing structured data
+    const existingScript = document.querySelector('script[type="application/ld+json"]');
+    if (existingScript) {
+      existingScript.remove();
+    }
+
+    // Create new structured data
+    const structuredData = {
+      "@context": "https://schema.org",
+      "@type": "NewsArticle",
+      "headline": article.title_pt || article.title,
+      "description": (article.content_pt || article.content).substring(0, 200),
+      "image": article.image_url,
+      "author": {
+        "@type": "Organization",
+        "name": article.source
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "TejoMag",
+        "logo": {
+          "@type": "ImageObject",
+          "url": window.location.origin + "/logo.png"
+        }
+      },
+      "datePublished": article.scraped_at,
+      "dateModified": article.scraped_at,
+      "mainEntityOfPage": {
+        "@type": "WebPage",
+        "@id": window.location.href
+      },
+      "articleSection": article.category,
+      "inLanguage": "pt-PT"
+    };
+
+    const script = document.createElement('script');
+    script.type = 'application/ld+json';
+    script.text = JSON.stringify(structuredData);
+    document.head.appendChild(script);
+  };
 
   const formatDate = (dateString) => {
     if (!dateString) return 'Data não disponível';

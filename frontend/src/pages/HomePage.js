@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import axios from 'axios';
 
 const HomePage = () => {
@@ -7,6 +7,8 @@ const HomePage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const location = useLocation();
 
   const fetchNews = async () => {
     setLoading(true);
@@ -16,6 +18,7 @@ const HomePage = () => {
       const response = await axios.get('/api/news');
       setArticles(response.data.articles || []);
       setLastUpdated(new Date());
+      setSearchQuery('');
     } catch (err) {
       console.error('Error fetching news:', err);
       setError('Erro ao carregar as notícias. Verifique se o servidor está rodando.');
@@ -24,9 +27,33 @@ const HomePage = () => {
     }
   };
 
+  const searchNews = async (query) => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const response = await axios.get(`/api/news/search?q=${encodeURIComponent(query)}`);
+      setArticles(response.data.articles || []);
+      setSearchQuery(query);
+    } catch (err) {
+      console.error('Error searching news:', err);
+      setError('Erro ao pesquisar notícias.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    fetchNews();
-  }, []);
+    // Check if there's a search query in URL
+    const params = new URLSearchParams(location.search);
+    const query = params.get('search');
+    
+    if (query) {
+      searchNews(query);
+    } else {
+      fetchNews();
+    }
+  }, [location.search]);
 
   const formatDate = (dateString) => {
     if (!dateString) return 'Data não disponível';
@@ -131,9 +158,32 @@ const HomePage = () => {
     },
     articlesGrid: {
       display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))',
-      gap: '2rem',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 350px), 1fr))',
+      gap: 'clamp(1rem, 3vw, 2rem)',
       marginTop: '2rem'
+    },
+    searchHeader: {
+      marginBottom: '2rem',
+      padding: '1rem',
+      backgroundColor: '#e0f2fe',
+      borderRadius: '8px',
+      borderLeft: '4px solid #1f6cac'
+    },
+    searchHeaderText: {
+      margin: 0,
+      color: '#1e293b',
+      fontSize: 'clamp(1rem, 2.5vw, 1.2rem)'
+    },
+    clearSearchButton: {
+      marginTop: '0.5rem',
+      padding: '0.5rem 1rem',
+      backgroundColor: '#1f6cac',
+      color: 'white',
+      border: 'none',
+      borderRadius: '6px',
+      cursor: 'pointer',
+      fontSize: '0.9rem',
+      fontWeight: '500'
     },
     articleCard: {
       background: 'white',
@@ -213,29 +263,35 @@ const HomePage = () => {
 
   return (
     <div>
-      {/* Hero Section */}
-      <div style={styles.hero}>
-        <h1 style={styles.heroTitle}>TejoMag</h1>
-        <p style={styles.heroSubtitle}>
-          Informação além das margens
-        </p>
-        <div style={styles.heroFeatures}>
-          <div style={styles.feature}>
-            <span>🌍</span>
-            <span>Notícias Internacionais</span>
-          </div>
-          <div style={styles.feature}>
-            <span>🇵🇹</span>
-            <span>Traduzido para Português</span>
-          </div>
-          <div style={styles.feature}>
-            <span>⚡</span>
-            <span>Atualizações em Tempo Real</span>
-          </div>
+      {/* Search Results Header */}
+      {searchQuery && (
+        <div style={styles.searchHeader}>
+          <h2 style={styles.searchHeaderText}>
+            {articles.length > 0 
+              ? `Encontrados ${articles.length} resultado${articles.length !== 1 ? 's' : ''} para "${searchQuery}"`
+              : `Nenhum resultado encontrado para "${searchQuery}"`
+            }
+          </h2>
+          <button 
+            style={styles.clearSearchButton}
+            onClick={fetchNews}
+            onMouseEnter={(e) => e.target.style.backgroundColor = '#1557a0'}
+            onMouseLeave={(e) => e.target.style.backgroundColor = '#1f6cac'}
+          >
+            ← Ver todas as notícias
+          </button>
         </div>
-      </div>
+      )}
 
-
+      {/* Hero Section */}
+      {!searchQuery && (
+        <div style={styles.hero}>
+          <h1 style={styles.heroTitle}>TejoMag</h1>
+          <p style={styles.heroSubtitle}>
+            Informação além das margens
+          </p>
+        </div>
+      )}
 
       {/* Error Message */}
       {error && (
@@ -254,7 +310,7 @@ const HomePage = () => {
       )}
 
       {/* No Articles */}
-      {!loading && !error && articles.length === 0 && (
+      {!loading && !error && articles.length === 0 && !searchQuery && (
         <div style={styles.noArticles}>
           <p>Nenhuma notícia encontrada. Tente atualizar a página.</p>
         </div>
@@ -265,7 +321,7 @@ const HomePage = () => {
         {articles.map((article) => (
           <Link 
             key={article.id} 
-            to={`/article/${article.id}`}
+            to={`/article/${article.slug || article.id}`}
             style={styles.articleCard}
             onMouseEnter={(e) => {
               e.target.style.transform = 'translateY(-8px)';
