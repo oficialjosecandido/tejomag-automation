@@ -443,7 +443,7 @@ const ArticleDetailPage = () => {
               style={styles.originalLink}
             >
               <span>🔗</span>
-              <span>Ver original no {article.source}</span>
+              <span>Conteúdo original: {article.source}</span>
             </a>
           </div>
 
