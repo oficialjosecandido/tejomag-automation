@@ -15,8 +15,8 @@ import logging
 app = Flask(__name__)
 CORS(app)
 
-# Initialize database when app starts
-init_db()
+# Global flag to track if app has been initialized
+_app_initialized = False
 
 # Setup logging
 logging.basicConfig(
@@ -37,6 +37,21 @@ if DEEPL_API_KEY:
         logger.error(f"DeepL initialization failed: {e}")
 else:
     logger.warning("⚠️  No DEEPL_API_KEY found. Translation disabled.")
+
+def ensure_app_initialized():
+    """Ensure the app is initialized before handling requests"""
+    global _app_initialized
+    if not _app_initialized:
+        logger.info("🚀 Initializing application...")
+        init_db()
+        setup_scheduler()
+        _app_initialized = True
+        logger.info("✅ Application initialized successfully")
+
+@app.before_request
+def before_request():
+    """Initialize app on first request"""
+    ensure_app_initialized()
 
 # Database setup
 def init_db():
