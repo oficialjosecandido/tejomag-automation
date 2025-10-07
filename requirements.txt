@@ -7,3 +7,4 @@ deepl==1.16.1
 schedule==1.2.0
 python-dotenv==1.0.0
 gunicorn==21.2.0
+psycopg2-binary==2.9.9

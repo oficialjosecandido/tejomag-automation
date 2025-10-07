@@ -3,7 +3,8 @@ from flask_cors import CORS
 import requests
 from bs4 import BeautifulSoup
 import deepl
-import sqlite3
+import psycopg2
+from psycopg2 import pool
 import os
 from datetime import datetime
 import time
@@ -24,6 +25,27 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Database configuration
+DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://tejomagadmin:TejoMag2024!Secure@tejomag-db.postgres.database.azure.com/tejomag_news?sslmode=require')
+
+# Connection pool for PostgreSQL
+db_pool = None
+
+def get_db_connection():
+    """Get a connection from the pool"""
+    global db_pool
+    if db_pool is None:
+        db_pool = psycopg2.pool.SimpleConnectionPool(
+            1, 10,
+            DATABASE_URL
+        )
+    return db_pool.getconn()
+
+def release_db_connection(conn):
+    """Release a connection back to the pool"""
+    if db_pool:
+        db_pool.putconn(conn)
 
 # Initialize DeepL translator
 DEEPL_API_KEY = os.getenv('DEEPL_API_KEY', '')
@@ -55,14 +77,15 @@ def before_request():
 
 # Database setup
 def init_db():
+    conn = None
     try:
-        conn = sqlite3.connect('news.db')
-        cursor = conn.cursor()
         logger.info("📊 Initializing database...")
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS articles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 title TEXT NOT NULL,
                 title_pt TEXT NOT NULL,
                 content TEXT NOT NULL,
@@ -70,34 +93,31 @@ def init_db():
                 image_url TEXT,
                 images TEXT,
                 slug TEXT UNIQUE,
-                url TEXT NOT NULL,
+                url TEXT NOT NULL UNIQUE,
                 source TEXT NOT NULL,
                 category TEXT DEFAULT 'Geral',
-                published_date TEXT,
-                scraped_at TEXT,
-                UNIQUE(url)
+                published_date TIMESTAMP,
+                scraped_at TIMESTAMP
             )
         ''')
-    
-    # Add slug column to existing tables if it doesn't exist
-    try:
-        cursor.execute('ALTER TABLE articles ADD COLUMN slug TEXT')
-    except:
-        pass
-    
-    # Add images column to existing tables if it doesn't exist
-    try:
-        cursor.execute('ALTER TABLE articles ADD COLUMN images TEXT')
-    except:
-        pass
-    
-    conn.commit()
-    conn.close()
-    logger.info("✅ Database initialized successfully")
-    
+        
+        # Create index on slug for faster lookups
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_articles_slug ON articles(slug)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_articles_source ON articles(source)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_articles_category ON articles(category)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_articles_scraped_at ON articles(scraped_at DESC)')
+        
+        conn.commit()
+        logger.info("✅ Database initialized successfully")
+        
     except Exception as e:
         logger.error(f"❌ Database initialization failed: {e}")
+        if conn:
+            conn.rollback()
         raise
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 def generate_slug(title):
     """Generate a URL-friendly slug from article title"""
@@ -635,8 +655,9 @@ def detect_category(title, content):
 @app.route('/api/news', methods=['GET'])
 def get_news():
     """Get latest news articles from database"""
+    conn = None
     try:
-        conn = sqlite3.connect('news.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         # Get all articles from database, ordered by most recent first
@@ -647,7 +668,6 @@ def get_news():
         ''')
         
         articles = cursor.fetchall()
-        conn.close()
         
         # Convert to list of dictionaries
         article_list = []
@@ -682,7 +702,11 @@ def get_news():
         })
         
     except Exception as e:
+        logger.error(f"Error fetching news: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 @app.route('/', methods=['GET'])
 def root():
@@ -701,18 +725,19 @@ def root():
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
+    conn = None
     try:
         # Test database connection
-        conn = sqlite3.connect('news.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT COUNT(*) FROM articles')
         article_count = cursor.fetchone()[0]
-        conn.close()
         
         return jsonify({
             'status': 'healthy', 
             'message': 'News API is running',
             'database': 'connected',
+            'database_type': 'PostgreSQL',
             'articles_count': article_count
         })
     except Exception as e:
@@ -722,6 +747,9 @@ def health_check():
             'message': 'Database connection failed',
             'error': str(e)
         }), 500
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 @app.route('/api/news/categories', methods=['GET'])
 def get_categories():
@@ -737,16 +765,17 @@ def search_news():
     if not query:
         return jsonify({'error': 'Query parameter is required'}), 400
     
+    conn = None
     try:
-        conn = sqlite3.connect('news.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Search in both title and content
+        # Search in both title and content using PostgreSQL ILIKE for case-insensitive search
         search_term = f'%{query}%'
         cursor.execute('''
             SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
             FROM articles 
-            WHERE title_pt LIKE ? OR content_pt LIKE ? OR title LIKE ? OR content LIKE ?
+            WHERE title_pt ILIKE %s OR content_pt ILIKE %s OR title ILIKE %s OR content ILIKE %s
             ORDER BY scraped_at DESC
             LIMIT 50
         ''', (search_term, search_term, search_term, search_term))
@@ -769,30 +798,32 @@ def search_news():
                 'scraped_at': row[12]
             })
         
-        conn.close()
         return jsonify({'articles': articles, 'query': query, 'count': len(articles)})
         
     except Exception as e:
         logger.error(f"Search error: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 @app.route('/api/news/category/<category>', methods=['GET'])
 def get_news_by_category(category):
     """Get news articles by category"""
+    conn = None
     try:
-        conn = sqlite3.connect('news.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         # Get articles from the specified category
         cursor.execute('''
             SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
             FROM articles 
-            WHERE category = ? 
+            WHERE category = %s 
             ORDER BY scraped_at DESC
         ''', (category,))
         
         articles = cursor.fetchall()
-        conn.close()
         
         # Convert to list of dictionaries
         article_list = []
@@ -828,20 +859,24 @@ def get_news_by_category(category):
         })
         
     except Exception as e:
+        logger.error(f"Error fetching category {category}: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 @app.route('/api/news/slug/<slug>', methods=['GET'])
 def get_news_by_slug(slug):
     """Get a single article by slug"""
     try:
-        conn = sqlite3.connect('news.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         # Get article by slug
         cursor.execute('''
             SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
             FROM articles 
-            WHERE slug = ?
+            WHERE slug = %s
         ''', (slug,))
         
         article = cursor.fetchone()
@@ -945,13 +980,13 @@ def run_news_job():
         print(f"📰 Total articles found: {len(all_articles)}")
         
         # Process and save articles
-        conn = sqlite3.connect('news.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         processed_count = 0
         for article in all_articles:
             # Check if article already exists
-            cursor.execute('SELECT id FROM articles WHERE url = ?', (article['url'],))
+            cursor.execute('SELECT id FROM articles WHERE url = %s', (article['url'],))
             existing = cursor.fetchone()
             
             if not existing:
@@ -972,7 +1007,7 @@ def run_news_job():
                 counter = 1
                 original_slug = slug
                 while True:
-                    cursor.execute('SELECT id FROM articles WHERE slug = ?', (slug,))
+                    cursor.execute('SELECT id FROM articles WHERE slug = %s', (slug,))
                     if not cursor.fetchone():
                         break
                     slug = f"{original_slug}-{counter}"
@@ -986,7 +1021,7 @@ def run_news_job():
                 
                 cursor.execute('''
                     INSERT INTO articles (title, title_pt, content, content_pt, image_url, images, slug, url, source, category, scraped_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ''', (article['title'], title_pt, article['content'], content_pt, 
                       article.get('image_url'), images_json, slug, article['url'], article['source'], category, now))
                 
