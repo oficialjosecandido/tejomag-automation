@@ -95,6 +95,7 @@ def generate_slug(title):
 
 def scrape_bbc_news():
     """Scrape the latest 3 news articles from BBC"""
+    print("Scraping BBC news")
     try:
         # BBC News homepage
         url = "https://www.bbc.com/news"
