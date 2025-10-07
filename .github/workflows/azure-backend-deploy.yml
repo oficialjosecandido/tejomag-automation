@@ -41,5 +41,5 @@ jobs:
       with:
         app-name: 'tejomag-backend'
         slot-name: 'production'
-        publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_1234567890ABCDEF1234567890ABCDEF12345678 }}
+        publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_1234567890ABCDEF12345 }}
         package: './backend'
