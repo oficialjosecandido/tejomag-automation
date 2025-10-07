@@ -7,7 +7,6 @@ const HomePage = () => {
   const [articles, setArticles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [lastUpdated, setLastUpdated] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const location = useLocation();
 
@@ -18,7 +17,6 @@ const HomePage = () => {
     try {
       const response = await axios.get(`${config.API_BASE_URL}/api/news`);
       setArticles(response.data.articles || []);
-      setLastUpdated(new Date());
       setSearchQuery('');
     } catch (err) {
       console.error('Error fetching news:', err);
