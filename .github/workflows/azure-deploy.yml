@@ -77,6 +77,6 @@ jobs:
           output_location: "build"
           skip_app_build: false
           app_build_command: "npm run build"
-          env:
-            REACT_APP_API_URL: ${{ secrets.REACT_APP_API_URL }}
+        env:
+          REACT_APP_API_URL: ${{ secrets.REACT_APP_API_URL }}
 
