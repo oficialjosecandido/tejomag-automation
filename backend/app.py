@@ -658,6 +658,20 @@ def get_news():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/', methods=['GET'])
+def root():
+    """Root endpoint"""
+    return jsonify({
+        'message': 'TejoMag API is running!',
+        'version': '1.0.0',
+        'endpoints': {
+            'news': '/api/news',
+            'health': '/api/health',
+            'categories': '/api/news/categories',
+            'search': '/api/news/search?q=query'
+        }
+    })
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
@@ -668,6 +682,53 @@ def get_categories():
     """Get all available categories"""
     categories = ['Política', 'Economia', 'Tecnologia', 'Saúde', 'Desporto', 'Cultura', 'Guerra e Conflitos', 'Ambiente', 'Direitos Humanos', 'Ciência', 'Geral']
     return jsonify({'categories': categories})
+
+@app.route('/api/news/search', methods=['GET'])
+def search_news():
+    """Search news articles by query"""
+    query = request.args.get('q', '').strip()
+    
+    if not query:
+        return jsonify({'error': 'Query parameter is required'}), 400
+    
+    try:
+        conn = sqlite3.connect('news.db')
+        cursor = conn.cursor()
+        
+        # Search in both title and content
+        search_term = f'%{query}%'
+        cursor.execute('''
+            SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
+            FROM articles 
+            WHERE title_pt LIKE ? OR content_pt LIKE ? OR title LIKE ? OR content LIKE ?
+            ORDER BY scraped_at DESC
+            LIMIT 50
+        ''', (search_term, search_term, search_term, search_term))
+        
+        articles = []
+        for row in cursor.fetchall():
+            articles.append({
+                'id': row[0],
+                'title': row[1],
+                'title_pt': row[2],
+                'content': row[3],
+                'content_pt': row[4],
+                'image_url': row[5],
+                'images': row[6],
+                'slug': row[7],
+                'url': row[8],
+                'source': row[9],
+                'category': row[10],
+                'published_date': row[11],
+                'scraped_at': row[12]
+            })
+        
+        conn.close()
+        return jsonify({'articles': articles, 'query': query, 'count': len(articles)})
+        
+    except Exception as e:
+        logger.error(f"Search error: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/news/category/<category>', methods=['GET'])
 def get_news_by_category(category):
@@ -934,7 +995,7 @@ if __name__ == '__main__':
     setup_scheduler()
     
     try:
-        app.run(debug=True, host='0.0.0.0', port=5002)
+        app.run(debug=True, host='0.0.0.0', port=5000)
     except KeyboardInterrupt:
         print("\n🛑 Shutting down TejoMag...")
         print("Goodbye! 👋")
