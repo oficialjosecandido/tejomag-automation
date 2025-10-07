@@ -30,6 +30,11 @@ jobs:
         source venv/bin/activate
         pip install -r backend/requirements.txt
     
+    - name: Login to Azure
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
     - name: Deploy to Azure Web App
       id: deploy-to-webapp
       uses: azure/webapps-deploy@v2
