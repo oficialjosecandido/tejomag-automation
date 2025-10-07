@@ -15,6 +15,9 @@ import logging
 app = Flask(__name__)
 CORS(app)
 
+# Initialize database when app starts
+init_db()
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -37,26 +40,29 @@ else:
 
 # Database setup
 def init_db():
-    conn = sqlite3.connect('news.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS articles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            title_pt TEXT NOT NULL,
-            content TEXT NOT NULL,
-            content_pt TEXT NOT NULL,
-            image_url TEXT,
-            images TEXT,
-            slug TEXT UNIQUE,
-            url TEXT NOT NULL,
-            source TEXT NOT NULL,
-            category TEXT DEFAULT 'Geral',
-            published_date TEXT,
-            scraped_at TEXT,
-            UNIQUE(url)
-        )
-    ''')
+    try:
+        conn = sqlite3.connect('news.db')
+        cursor = conn.cursor()
+        logger.info("📊 Initializing database...")
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS articles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                title_pt TEXT NOT NULL,
+                content TEXT NOT NULL,
+                content_pt TEXT NOT NULL,
+                image_url TEXT,
+                images TEXT,
+                slug TEXT UNIQUE,
+                url TEXT NOT NULL,
+                source TEXT NOT NULL,
+                category TEXT DEFAULT 'Geral',
+                published_date TEXT,
+                scraped_at TEXT,
+                UNIQUE(url)
+            )
+        ''')
     
     # Add slug column to existing tables if it doesn't exist
     try:
@@ -72,6 +78,11 @@ def init_db():
     
     conn.commit()
     conn.close()
+    logger.info("✅ Database initialized successfully")
+    
+    except Exception as e:
+        logger.error(f"❌ Database initialization failed: {e}")
+        raise
 
 def generate_slug(title):
     """Generate a URL-friendly slug from article title"""
@@ -675,7 +686,27 @@ def root():
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
-    return jsonify({'status': 'healthy', 'message': 'News API is running'})
+    try:
+        # Test database connection
+        conn = sqlite3.connect('news.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM articles')
+        article_count = cursor.fetchone()[0]
+        conn.close()
+        
+        return jsonify({
+            'status': 'healthy', 
+            'message': 'News API is running',
+            'database': 'connected',
+            'articles_count': article_count
+        })
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return jsonify({
+            'status': 'unhealthy', 
+            'message': 'Database connection failed',
+            'error': str(e)
+        }), 500
 
 @app.route('/api/news/categories', methods=['GET'])
 def get_categories():
