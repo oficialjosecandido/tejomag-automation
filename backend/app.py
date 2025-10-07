@@ -999,15 +999,16 @@ def setup_scheduler():
     # Schedule news job to run every hour
     schedule.every().hour.do(run_news_job)
     
-    # Also run immediately on startup
-    print("🚀 Running initial news fetch...")
-    run_news_job()
-    
     # Start scheduler in background thread
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
     
     print("⏰ Scheduler started - news will be fetched every hour")
+    
+    # Run initial news fetch in background (non-blocking)
+    initial_fetch_thread = threading.Thread(target=run_news_job, daemon=True)
+    initial_fetch_thread.start()
+    print("🚀 Initial news fetch started in background...")
 
 if __name__ == '__main__':
     init_db()

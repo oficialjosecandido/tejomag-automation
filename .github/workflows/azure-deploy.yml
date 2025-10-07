@@ -46,11 +46,17 @@ jobs:
           zip -r ../backend-deploy.zip . -x "*.pyc" "__pycache__/*" "*.db"
           cd ..
           
-          # Deploy using Azure CLI
-          az webapp deployment source config-zip \
-            --resource-group tejomag-rg \
-            --name ${{ env.AZURE_WEBAPP_NAME }} \
-            --src backend-deploy.zip
+        # Deploy using Azure CLI
+        az webapp deployment source config-zip \
+          --resource-group tejomag-rg \
+          --name ${{ env.AZURE_WEBAPP_NAME }} \
+          --src backend-deploy.zip
+        
+        # Set startup command for Azure App Service
+        az webapp config set \
+          --resource-group tejomag-rg \
+          --name ${{ env.AZURE_WEBAPP_NAME }} \
+          --startup-file "gunicorn --bind=0.0.0.0:8000 --workers=2 --timeout=300 --access-logfile=- --error-logfile=- app:app"
   
   deploy-frontend:
     runs-on: ubuntu-latest
