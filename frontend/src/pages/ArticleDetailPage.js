@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import axios from 'axios';
+import config from '../config';
 
 const ArticleDetailPage = () => {
   const { slug } = useParams();
@@ -15,11 +16,11 @@ const ArticleDetailPage = () => {
         // Try to fetch by slug first
         let response;
         try {
-          response = await axios.get(`/api/news/slug/${slug}`);
+          response = await axios.get(`${config.API_BASE_URL}/api/news/slug/${slug}`);
           setArticle(response.data);
         } catch (slugError) {
           // If slug fails, try as ID (for backward compatibility)
-          const allResponse = await axios.get('/api/news');
+          const allResponse = await axios.get(`${config.API_BASE_URL}/api/news`);
           const articles = allResponse.data.articles || [];
           const foundArticle = articles.find(a => a.id.toString() === slug);
           

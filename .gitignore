@@ -14,6 +14,15 @@ ENV/
 *.sqlite
 *.sqlite3
 
+# Logs
+logs/
+*.log
+
+# Environment
+.env
+.env.local
+.env.production
+
 # Node
 node_modules/
 npm-debug.log*
@@ -25,7 +34,6 @@ yarn-error.log*
 # Build
 build/
 dist/
-*.log
 
 # OS
 .DS_Store
@@ -39,6 +47,10 @@ Thumbs.db
 .idea/
 *.sublime-*
 
-# Environment
-.env
-.env.local
+# Azure
+.azure/
+*.publishsettings
+
+# Misc
+.coverage
+htmlcov/

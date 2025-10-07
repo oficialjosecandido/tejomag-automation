@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import axios from 'axios';
+import config from '../config';
 
 const HomePage = () => {
   const [articles, setArticles] = useState([]);
@@ -15,7 +16,7 @@ const HomePage = () => {
     setError(null);
     
     try {
-      const response = await axios.get('/api/news');
+      const response = await axios.get(`${config.API_BASE_URL}/api/news`);
       setArticles(response.data.articles || []);
       setLastUpdated(new Date());
       setSearchQuery('');
@@ -32,7 +33,7 @@ const HomePage = () => {
     setError(null);
     
     try {
-      const response = await axios.get(`/api/news/search?q=${encodeURIComponent(query)}`);
+      const response = await axios.get(`${config.API_BASE_URL}/api/news/search?q=${encodeURIComponent(query)}`);
       setArticles(response.data.articles || []);
       setSearchQuery(query);
     } catch (err) {

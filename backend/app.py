@@ -2,7 +2,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
 from bs4 import BeautifulSoup
-from googletrans import Translator
+import deepl
 import sqlite3
 import os
 from datetime import datetime
@@ -10,12 +10,30 @@ import time
 import schedule
 import threading
 import atexit
+import logging
 
 app = Flask(__name__)
 CORS(app)
 
-# Initialize translator
-translator = Translator()
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Initialize DeepL translator
+DEEPL_API_KEY = os.getenv('DEEPL_API_KEY', '')
+translator = None
+
+if DEEPL_API_KEY:
+    try:
+        translator = deepl.Translator(DEEPL_API_KEY)
+        logger.info("✅ DeepL translator initialized")
+    except Exception as e:
+        logger.error(f"DeepL initialization failed: {e}")
+else:
+    logger.warning("⚠️  No DEEPL_API_KEY found. Translation disabled.")
 
 # Database setup
 def init_db():
@@ -123,24 +141,22 @@ def scrape_bbc_news():
                     found_links.add(href)
                     
                     # Get article content
-                    print(f"Scraping article: {href}")
+                    logger.info(f"Scraping article: {href}")
                     article_content = scrape_article_content(href)
                     if article_content:
                         articles.append(article_content)
-                        print(f"Successfully scraped article: {article_content['title'][:50]}...")
+                        logger.info(f"Successfully scraped article: {article_content['title'][:50]}...")
                         if len(articles) >= 3:
                             break
             
             if len(articles) >= 3:
                 break
         
-        print(f"Total articles found: {len(articles)}")
+        logger.info(f"Total BBC articles found: {len(articles)}")
         return articles[:3]
         
     except Exception as e:
-        print(f"Error scraping BBC: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error scraping BBC: {e}", exc_info=True)
         return []
 
 def scrape_article_content(url):
@@ -255,7 +271,7 @@ def scrape_article_content(url):
             }
         
     except Exception as e:
-        print(f"Error scraping article {url}: {e}")
+        logger.error(f"Error scraping article {url}: {e}")
     
     return None
 
@@ -322,11 +338,11 @@ def scrape_le_monde_news():
             if len(articles) >= 3:
                 break
         
-        print(f"Le Monde total articles found: {len(articles)}")
+        logger.info(f"Le Monde total articles found: {len(articles)}")
         return articles[:3]  # Return only first 3
         
     except Exception as e:
-        print(f"Error scraping Le Monde news: {e}")
+        logger.error(f"Error scraping Le Monde news: {e}")
         return []
 
 def scrape_le_monde_article_content(url):
@@ -424,50 +440,58 @@ def scrape_le_monde_article_content(url):
             }
         
     except Exception as e:
-        print(f"Error scraping Le Monde article {url}: {e}")
+        logger.error(f"Error scraping Le Monde article {url}: {e}")
     
     return None
 
 def translate_to_portuguese(text, source_lang='en'):
-    """Translate text to Portuguese with improved quality"""
+    """Translate text to Portuguese using DeepL"""
     try:
         if not text or len(text.strip()) == 0:
             return text
         
+        if not translator:
+            logger.warning("Translator not initialized, returning original text")
+            return text
+        
         # Clean and prepare text for translation
         text = text.strip()
-        
-        # Remove extra whitespace and normalize
         text = ' '.join(text.split())
         
-        # Split long text into chunks for translation (smaller chunks = better quality)
-        if len(text) > 3000:  # Smaller chunks for better translation quality
-            chunks = [text[i:i+3000] for i in range(0, len(text), 3000)]
+        # Map source language codes for DeepL
+        source_lang_map = {
+            'en': 'EN',
+            'fr': 'FR'
+        }
+        source = source_lang_map.get(source_lang.lower(), 'EN')
+        
+        # DeepL can handle longer texts
+        if len(text) > 5000:
+            chunks = [text[i:i+5000] for i in range(0, len(text), 5000)]
             translated_chunks = []
             for chunk in chunks:
                 try:
-                    # Use Brazilian Portuguese for more natural translations
-                    result = translator.translate(chunk, dest='pt', src=source_lang)
-                    translated_text = result.text
-                    
-                    # Post-process translation for better quality
-                    translated_text = post_process_translation(translated_text)
-                    translated_chunks.append(translated_text)
-                    time.sleep(0.5)  # Longer delay for better API response
+                    result = translator.translate_text(
+                        chunk, 
+                        source_lang=source,
+                        target_lang='PT-PT'  # European Portuguese
+                    )
+                    translated_chunks.append(result.text)
+                    time.sleep(0.3)
                 except Exception as chunk_error:
-                    print(f"Chunk translation error: {chunk_error}")
+                    logger.error(f"Chunk translation error: {chunk_error}")
                     translated_chunks.append(chunk)
             return ' '.join(translated_chunks)
         else:
-            # Use Brazilian Portuguese for more natural translations
-            result = translator.translate(text, dest='pt', src=source_lang)
-            translated_text = result.text
+            result = translator.translate_text(
+                text,
+                source_lang=source,
+                target_lang='PT-PT'  # European Portuguese
+            )
+            return result.text
             
-            # Post-process translation for better quality
-            translated_text = post_process_translation(translated_text)
-            return translated_text
     except Exception as e:
-        print(f"Translation error: {e}")
+        logger.error(f"Translation error: {e}")
         return text
 
 def post_process_translation(text):
@@ -784,7 +808,7 @@ def scheduler_status():
 def run_news_job():
     """Background job to fetch and save latest news from multiple sources"""
     try:
-        print(f"\n🔄 Running scheduled news job at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"🔄 Running scheduled news job at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         all_articles = []
         
