@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 import deepl
 import psycopg2
 from psycopg2 import pool
+from contextlib import contextmanager
 import os
 from datetime import datetime
 import time
@@ -36,16 +37,61 @@ def get_db_connection():
     """Get a connection from the pool"""
     global db_pool
     if db_pool is None:
-        db_pool = psycopg2.pool.SimpleConnectionPool(
-            1, 10,
-            DATABASE_URL
-        )
-    return db_pool.getconn()
+        try:
+            db_pool = psycopg2.pool.SimpleConnectionPool(
+                1, 20,  # Increased max connections
+                DATABASE_URL,
+                minconn=1,
+                maxconn=20
+            )
+            logger.info("✅ Database connection pool initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to create connection pool: {e}")
+            # Fallback to direct connection
+            return psycopg2.connect(DATABASE_URL)
+    
+    try:
+        return db_pool.getconn()
+    except psycopg2.pool.PoolError:
+        logger.warning("⚠️ Connection pool exhausted, creating direct connection")
+        return psycopg2.connect(DATABASE_URL)
 
 def release_db_connection(conn):
     """Release a connection back to the pool"""
-    if db_pool:
-        db_pool.putconn(conn)
+    if conn and db_pool:
+        try:
+            db_pool.putconn(conn)
+        except Exception as e:
+            logger.error(f"Error releasing connection: {e}")
+            try:
+                conn.close()
+            except:
+                pass
+    elif conn:
+        try:
+            conn.close()
+        except:
+            pass
+
+@contextmanager
+def get_db_cursor():
+    """Context manager for database connections"""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        yield cursor
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        raise e
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            release_db_connection(conn)
 
 # Initialize DeepL translator
 DEEPL_API_KEY = os.getenv('DEEPL_API_KEY', '')
@@ -655,58 +701,52 @@ def detect_category(title, content):
 @app.route('/api/news', methods=['GET'])
 def get_news():
     """Get latest news articles from database"""
-    conn = None
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Get all articles from database, ordered by most recent first
-        cursor.execute('''
-            SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
-            FROM articles 
-            ORDER BY scraped_at DESC
-        ''')
-        
-        articles = cursor.fetchall()
-        
-        # Convert to list of dictionaries
-        article_list = []
-        for article in articles:
-            import json
-            images = []
-            try:
-                if article[6]:  # images column
-                    images = json.loads(article[6])
-            except:
-                pass
-                
-            article_list.append({
-                'id': article[0],
-                'title': article[1],
-                'title_pt': article[2],
-                'content': article[3],
-                'content_pt': article[4],
-                'image_url': article[5],
-                'images': images,
-                'slug': article[7],
-                'url': article[8],
-                'source': article[9],
-                'category': article[10],
-                'published_date': article[11],
-                'scraped_at': article[12]
+        with get_db_cursor() as cursor:
+            # Get all articles from database, ordered by most recent first
+            cursor.execute('''
+                SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
+                FROM articles 
+                ORDER BY scraped_at DESC
+            ''')
+            
+            articles = cursor.fetchall()
+            
+            # Convert to list of dictionaries
+            article_list = []
+            for article in articles:
+                import json
+                images = []
+                try:
+                    if article[6]:  # images column
+                        images = json.loads(article[6])
+                except:
+                    pass
+                    
+                article_list.append({
+                    'id': article[0],
+                    'title': article[1],
+                    'title_pt': article[2],
+                    'content': article[3],
+                    'content_pt': article[4],
+                    'image_url': article[5],
+                    'images': images,
+                    'slug': article[7],
+                    'url': article[8],
+                    'source': article[9],
+                    'category': article[10],
+                    'published_date': article[11],
+                    'scraped_at': article[12]
+                })
+            
+            return jsonify({
+                'articles': article_list,
+                'count': len(article_list)
             })
-        
-        return jsonify({
-            'articles': article_list,
-            'count': len(article_list)
-        })
         
     except Exception as e:
         logger.error(f"Error fetching news: {e}")
         return jsonify({'error': str(e)}), 500
-    finally:
-        if conn:
-            release_db_connection(conn)
 
 @app.route('/', methods=['GET'])
 def root():
@@ -725,21 +765,18 @@ def root():
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
-    conn = None
     try:
-        # Test database connection
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT COUNT(*) FROM articles')
-        article_count = cursor.fetchone()[0]
-        
-        return jsonify({
-            'status': 'healthy', 
-            'message': 'News API is running',
-            'database': 'connected',
-            'database_type': 'PostgreSQL',
-            'articles_count': article_count
-        })
+        with get_db_cursor() as cursor:
+            cursor.execute('SELECT COUNT(*) FROM articles')
+            article_count = cursor.fetchone()[0]
+            
+            return jsonify({
+                'status': 'healthy', 
+                'message': 'News API is running',
+                'database': 'connected',
+                'database_type': 'PostgreSQL',
+                'articles_count': article_count
+            })
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return jsonify({
@@ -747,9 +784,6 @@ def health_check():
             'message': 'Database connection failed',
             'error': str(e)
         }), 500
-    finally:
-        if conn:
-            release_db_connection(conn)
 
 @app.route('/api/news/categories', methods=['GET'])
 def get_categories():
