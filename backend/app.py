@@ -16,7 +16,13 @@ import logging
 import json
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=[
+    'https://tejomag.pt',
+    'https://www.tejomag.pt', 
+    'https://victorious-hill-04593eb03.2.azurestaticapps.net',
+    'http://localhost:3000',
+    'http://localhost:3001'
+])
 
 # Global flag to track if app has been initialized
 _app_initialized = False
@@ -1125,11 +1131,13 @@ def root():
     return jsonify({
         'message': 'TejoMag API is running!',
         'version': '1.0.0',
+        'frontend': 'https://tejomag.pt',
         'endpoints': {
             'news': '/api/news',
             'health': '/api/health',
             'categories': '/api/news/categories',
-            'search': '/api/news/search?q=query'
+            'search': '/api/news/search?q=query',
+            'linkedin_post': '/api/linkedin/post/{article_id}'
         }
     })
 
