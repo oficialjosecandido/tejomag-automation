@@ -13,6 +13,7 @@ import schedule
 import threading
 import atexit
 import logging
+import json
 
 app = Flask(__name__)
 CORS(app)
@@ -105,6 +106,13 @@ if DEEPL_API_KEY:
         logger.error(f"DeepL initialization failed: {e}")
 else:
     logger.warning("⚠️  No DEEPL_API_KEY found. Translation disabled.")
+
+# LinkedIn API configuration
+LINKEDIN_CLIENT_ID = os.getenv('LINKEDIN_CLIENT_ID', '')
+LINKEDIN_CLIENT_SECRET = os.getenv('LINKEDIN_CLIENT_SECRET', '')
+LINKEDIN_ACCESS_TOKEN = os.getenv('LINKEDIN_ACCESS_TOKEN', '')
+LINKEDIN_PERSON_URN = os.getenv('LINKEDIN_PERSON_URN', '')  # Your LinkedIn person URN
+LINKEDIN_ENABLED = bool(LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET and LINKEDIN_ACCESS_TOKEN and LINKEDIN_PERSON_URN)
 
 def ensure_app_initialized():
     """Ensure the app is initialized before handling requests"""
@@ -878,6 +886,113 @@ def post_process_translation(text):
         print(f"Post-processing error: {e}")
         return text
 
+def format_linkedin_post(article):
+    """Format article for LinkedIn posting"""
+    try:
+        # Create an engaging post with hashtags
+        title = article.get('title_pt', article.get('title', ''))
+        content = article.get('content_pt', article.get('content', ''))
+        source = article.get('source', '')
+        category = article.get('category', 'Geral')
+        url = article.get('url', '')
+        
+        # Truncate content for LinkedIn (max ~1300 chars recommended)
+        max_content_length = 800
+        if len(content) > max_content_length:
+            content = content[:max_content_length] + "..."
+        
+        # Create engaging post text
+        post_text = f"📰 {title}\n\n{content}\n\n"
+        
+        # Add source and category
+        post_text += f"Fonte: {source}\n"
+        post_text += f"Categoria: {category}\n\n"
+        
+        # Add relevant hashtags
+        hashtags = {
+            'Política': '#Política #Notícias #Portugal',
+            'Economia': '#Economia #Mercados #Finanças',
+            'Tecnologia': '#Tecnologia #Inovação #Digital',
+            'Saúde': '#Saúde #BemEstar #Medicina',
+            'Desporto': '#Desporto #Futebol #Competição',
+            'Cultura': '#Cultura #Arte #Entretenimento',
+            'Guerra e Conflitos': '#Guerra #Conflitos #Geopolítica',
+            'Ambiente': '#Ambiente #Sustentabilidade #Clima',
+            'Direitos Humanos': '#DireitosHumanos #Justiça #Igualdade',
+            'Ciência': '#Ciência #Investigação #Descobertas',
+            'Geral': '#Notícias #Informação #Portugal'
+        }
+        
+        post_text += hashtags.get(category, '#Notícias #Informação #Portugal')
+        post_text += "\n\n#TejoMag #InformaçãoAlémDasMargens"
+        
+        # Add link to original article
+        if url:
+            post_text += f"\n\n🔗 Leia mais: {url}"
+        
+        return post_text
+        
+    except Exception as e:
+        logger.error(f"Error formatting LinkedIn post: {e}")
+        return None
+
+def post_to_linkedin(article):
+    """Post article to LinkedIn using LinkedIn API"""
+    try:
+        if not LINKEDIN_ENABLED:
+            logger.info("LinkedIn posting disabled - missing credentials")
+            return False
+        
+        post_text = format_linkedin_post(article)
+        if not post_text:
+            logger.error("Failed to format LinkedIn post")
+            return False
+        
+        # LinkedIn API endpoint for posting
+        linkedin_api_url = "https://api.linkedin.com/v2/ugcPosts"
+        
+        headers = {
+            'Authorization': f'Bearer {LINKEDIN_ACCESS_TOKEN}',
+            'Content-Type': 'application/json',
+            'X-Restli-Protocol-Version': '2.0.0'
+        }
+        
+        # Prepare the post data
+        post_data = {
+            "author": f"urn:li:person:{LINKEDIN_PERSON_URN}",
+            "lifecycleState": "PUBLISHED",
+            "specificContent": {
+                "com.linkedin.ugc.ShareContent": {
+                    "shareCommentary": {
+                        "text": post_text
+                    },
+                    "shareMediaCategory": "NONE"
+                }
+            },
+            "visibility": {
+                "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
+            }
+        }
+        
+        # Make the API request
+        response = requests.post(
+            linkedin_api_url,
+            headers=headers,
+            data=json.dumps(post_data),
+            timeout=30
+        )
+        
+        if response.status_code == 201:
+            logger.info(f"✅ Successfully posted to LinkedIn: {article.get('title_pt', 'Unknown title')[:50]}...")
+            return True
+        else:
+            logger.error(f"❌ LinkedIn posting failed: {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error posting to LinkedIn: {e}")
+        return False
+
 def detect_category(title, content):
     """Detect article category based on keywords - focused on specific topics"""
     text = f"{title} {content}".lower()
@@ -1031,7 +1146,9 @@ def health_check():
                 'message': 'News API is running',
                 'database': 'connected',
                 'database_type': 'PostgreSQL',
-                'articles_count': article_count
+                'articles_count': article_count,
+                'linkedin_enabled': LINKEDIN_ENABLED,
+                'deepl_enabled': bool(translator)
             })
     except Exception as e:
         logger.error(f"Health check failed: {e}")
@@ -1040,6 +1157,50 @@ def health_check():
             'message': 'Database connection failed',
             'error': str(e)
         }), 500
+
+@app.route('/api/linkedin/post/<int:article_id>', methods=['POST'])
+def post_article_to_linkedin(article_id):
+    """Manually post a specific article to LinkedIn"""
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute('''
+                SELECT title, title_pt, content, content_pt, source, category, url
+                FROM articles WHERE id = %s
+            ''', (article_id,))
+            
+            article = cursor.fetchone()
+            if not article:
+                return jsonify({'error': 'Article not found'}), 404
+            
+            # Prepare article data
+            article_data = {
+                'title_pt': article[1],
+                'content_pt': article[3],
+                'source': article[4],
+                'category': article[5],
+                'url': article[6]
+            }
+            
+            # Post to LinkedIn
+            success = post_to_linkedin(article_data)
+            
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': 'Article posted to LinkedIn successfully',
+                    'article_id': article_id,
+                    'title': article_data['title_pt']
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'message': 'Failed to post to LinkedIn',
+                    'article_id': article_id
+                }), 500
+                
+    except Exception as e:
+        logger.error(f"Error posting article {article_id} to LinkedIn: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/news/categories', methods=['GET'])
 def get_categories():
@@ -1331,6 +1492,30 @@ def run_news_job():
                 
                 processed_count += 1
                 print(f"✅ Added {article['source']}: {article['title'][:50]}... (slug: {slug})")
+                
+                # Post to LinkedIn if enabled
+                if LINKEDIN_ENABLED:
+                    try:
+                        # Create article data for LinkedIn posting
+                        linkedin_article = {
+                            'title_pt': title_pt,
+                            'content_pt': content_pt,
+                            'source': article['source'],
+                            'category': category,
+                            'url': article['url']
+                        }
+                        
+                        # Post to LinkedIn in a separate thread to avoid blocking
+                        linkedin_thread = threading.Thread(
+                            target=post_to_linkedin,
+                            args=(linkedin_article,),
+                            daemon=True
+                        )
+                        linkedin_thread.start()
+                        print(f"📱 LinkedIn posting queued for: {title_pt[:50]}...")
+                        
+                    except Exception as e:
+                        print(f"❌ Error queuing LinkedIn post: {e}")
             else:
                 print(f"⏭️  Skipped (already exists): {article['title'][:50]}...")
         
