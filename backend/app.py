@@ -685,12 +685,14 @@ def scrape_el_pais_article_content(url):
         # Get more content - increase from 8 to 20 paragraphs for full text
         content = ' '.join(content_paragraphs[:20])
         
-        # Extract images with better filtering
+        # Extract images with better filtering - prioritize article content images
         image_selectors = [
-            '.article_body img',
+            '.article_body img',  # Article content images first
             '.article-content img',
             'article img',
-            '.entry-content img'
+            '.entry-content img',
+            '.media img',  # Media section images
+            '.figure img'  # Figure images
         ]
         
         image_url = None
@@ -699,7 +701,7 @@ def scrape_el_pais_article_content(url):
         for selector in image_selectors:
             imgs = soup.select(selector)
             for img in imgs:
-                src = img.get('src') or img.get('data-src')
+                src = img.get('src') or img.get('data-src') or img.get('data-lazy-src')
                 if src and 'placeholder' not in src.lower():
                     if src.startswith('//'):
                         src = 'https:' + src
@@ -716,13 +718,29 @@ def scrape_el_pais_article_content(url):
                         'icon',
                         'placeholder',
                         'elpais.com/static/',
-                        'sprite'
+                        'sprite',
+                        'social',
+                        'share',
+                        'advertisement',
+                        'ad_',
+                        'banner'
                     ]
                     
                     is_generic = any(pattern in src.lower() for pattern in generic_patterns)
                     
-                    # Only include meaningful images
-                    if not is_generic and src not in all_images:
+                    # Check if image has meaningful dimensions (not tiny icons)
+                    width = img.get('width')
+                    height = img.get('height')
+                    is_small = False
+                    if width and height:
+                        try:
+                            if int(width) < 200 or int(height) < 150:
+                                is_small = True
+                        except:
+                            pass
+                    
+                    # Only include meaningful, non-generic images
+                    if not is_generic and not is_small and src not in all_images:
                         all_images.append(src)
                         
                         # Set the first meaningful image as the main image
