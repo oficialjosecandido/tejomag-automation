@@ -425,14 +425,14 @@ def scrape_le_monde_news():
                     articles.append(article)
                     print(f"Successfully scraped Le Monde article: {article['title'][:50]}...")
                     
-                    if len(articles) >= 3:  # Limit to 3 articles
+                    if len(articles) >= 2:  # Limit to 2 articles
                         break
             
-            if len(articles) >= 3:
+            if len(articles) >= 2:
                 break
         
         logger.info(f"Le Monde total articles found: {len(articles)}")
-        return articles[:3]  # Return only first 3
+        return articles[:2]  # Return only first 2
         
     except Exception as e:
         logger.error(f"Error scraping Le Monde news: {e}")
@@ -492,7 +492,7 @@ def scrape_le_monde_article_content(url):
         # Get more content - increase from 8 to 20 paragraphs for full text
         content = ' '.join(content_paragraphs[:20])
         
-        # Extract ALL images
+        # Extract images with better filtering
         image_selectors = [
             '.article__img img',
             '.article__media img',
@@ -514,13 +514,36 @@ def scrape_le_monde_article_content(url):
                     elif src.startswith('/'):
                         src = f'https://www.lemonde.fr{src}'
                     
-                    # Avoid duplicates
-                    if src not in all_images:
+                    # Filter out generic/default images
+                    generic_patterns = [
+                        'default',
+                        'logo',
+                        'header',
+                        'footer',
+                        'avatar',
+                        'icon',
+                        'placeholder',
+                        'lemonde.fr/static/',
+                        'sprite'
+                    ]
+                    
+                    is_generic = any(pattern in src.lower() for pattern in generic_patterns)
+                    
+                    # Only include meaningful images
+                    if not is_generic and src not in all_images:
                         all_images.append(src)
                         
-                        # Set the first image as the main image
+                        # Set the first meaningful image as the main image
                         if image_url is None:
                             image_url = src
+        
+        # If no meaningful image found, try to extract from article metadata
+        if not image_url:
+            meta_image = soup.find('meta', property='og:image')
+            if meta_image and meta_image.get('content'):
+                image_url = meta_image.get('content')
+                if image_url not in all_images:
+                    all_images.append(image_url)
         
         if title and content and len(content) > 100:
             return {
@@ -534,6 +557,198 @@ def scrape_le_monde_article_content(url):
         
     except Exception as e:
         logger.error(f"Error scraping Le Monde article {url}: {e}")
+    
+    return None
+
+def scrape_el_pais_news():
+    """Scrape latest news from El Pais"""
+    try:
+        url = 'https://elpais.com'
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Multiple selectors to find article links
+        selectors = [
+            'a[href*="/articulo/"]',
+            'a[href*="/internacional/"]',
+            'a[href*="/politica/"]',
+            'a[href*="/economia/"]',
+            'a[href*="/sociedad/"]',
+            '.c_t a',
+            '.headline a',
+            'article a'
+        ]
+        
+        articles = []
+        seen_urls = set()
+        
+        for selector in selectors:
+            links = soup.select(selector)
+            print(f"El Pais: Found {len(links)} links with selector: {selector}")
+            
+            for link in links[:10]:  # Limit to first 10 per selector
+                href = link.get('href')
+                if not href:
+                    continue
+                    
+                # Make URL absolute
+                if href.startswith('/'):
+                    href = f'https://elpais.com{href}'
+                elif not href.startswith('http'):
+                    continue
+                
+                # Skip if we've already seen this URL
+                if href in seen_urls:
+                    continue
+                seen_urls.add(href)
+                
+                # Skip non-article URLs
+                if not any(pattern in href for pattern in ['/articulo/', '/internacional/', '/politica/', '/economia/', '/sociedad/']):
+                    continue
+                
+                # Scrape article content
+                article = scrape_el_pais_article_content(href)
+                if article:
+                    articles.append(article)
+                    print(f"Successfully scraped El Pais article: {article['title'][:50]}...")
+                    
+                    if len(articles) >= 1:  # Limit to 1 article
+                        break
+            
+            if len(articles) >= 1:
+                break
+        
+        logger.info(f"El Pais total articles found: {len(articles)}")
+        return articles[:1]  # Return only first 1
+        
+    except Exception as e:
+        logger.error(f"Error scraping El Pais news: {e}")
+        return []
+
+def scrape_el_pais_article_content(url):
+    """Scrape individual El Pais article content"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Extract title
+        title_selectors = [
+            'h1[data-testid="headline"]',
+            'h1.headline',
+            'h1.article-title',
+            'h1'
+        ]
+        
+        title = None
+        for selector in title_selectors:
+            title_elem = soup.select_one(selector)
+            if title_elem and title_elem.get_text().strip():
+                title = title_elem.get_text().strip()
+                break
+        
+        if not title:
+            return None
+        
+        # Extract content
+        content_selectors = [
+            '.article_body p',
+            '.article-content p',
+            'article p',
+            '.entry-content p'
+        ]
+        
+        content_paragraphs = []
+        for selector in content_selectors:
+            paragraphs = soup.select(selector)
+            for p in paragraphs:
+                text = p.get_text().strip()
+                if len(text) > 50:  # Filter out short paragraphs
+                    content_paragraphs.append(text)
+            if content_paragraphs:
+                break
+        
+        if not content_paragraphs:
+            return None
+        
+        # Get more content - increase from 8 to 20 paragraphs for full text
+        content = ' '.join(content_paragraphs[:20])
+        
+        # Extract images with better filtering
+        image_selectors = [
+            '.article_body img',
+            '.article-content img',
+            'article img',
+            '.entry-content img'
+        ]
+        
+        image_url = None
+        all_images = []
+        
+        for selector in image_selectors:
+            imgs = soup.select(selector)
+            for img in imgs:
+                src = img.get('src') or img.get('data-src')
+                if src and 'placeholder' not in src.lower():
+                    if src.startswith('//'):
+                        src = 'https:' + src
+                    elif src.startswith('/'):
+                        src = f'https://elpais.com{src}'
+                    
+                    # Filter out generic/default images
+                    generic_patterns = [
+                        'default',
+                        'logo',
+                        'header',
+                        'footer',
+                        'avatar',
+                        'icon',
+                        'placeholder',
+                        'elpais.com/static/',
+                        'sprite'
+                    ]
+                    
+                    is_generic = any(pattern in src.lower() for pattern in generic_patterns)
+                    
+                    # Only include meaningful images
+                    if not is_generic and src not in all_images:
+                        all_images.append(src)
+                        
+                        # Set the first meaningful image as the main image
+                        if image_url is None:
+                            image_url = src
+        
+        # If no meaningful image found, try to extract from article metadata
+        if not image_url:
+            meta_image = soup.find('meta', property='og:image')
+            if meta_image and meta_image.get('content'):
+                image_url = meta_image.get('content')
+                if image_url not in all_images:
+                    all_images.append(image_url)
+        
+        if title and content and len(content) > 100:
+            return {
+                'title': title,
+                'content': content,
+                'image_url': image_url,
+                'images': all_images,  # Store all images
+                'url': url,
+                'source': 'El Pais'
+            }
+        
+    except Exception as e:
+        logger.error(f"Error scraping El Pais article {url}: {e}")
     
     return None
 
@@ -700,15 +915,25 @@ def detect_category(title, content):
 
 @app.route('/api/news', methods=['GET'])
 def get_news():
-    """Get latest news articles from database"""
+    """Get latest news articles from database with pagination"""
     try:
+        # Get pagination parameters
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 50))
+        offset = (page - 1) * limit
+        
         with get_db_cursor() as cursor:
-            # Get all articles from database, ordered by most recent first
+            # Get total count
+            cursor.execute('SELECT COUNT(*) FROM articles')
+            total_count = cursor.fetchone()[0]
+            
+            # Get paginated articles
             cursor.execute('''
                 SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
                 FROM articles 
                 ORDER BY scraped_at DESC
-            ''')
+                LIMIT %s OFFSET %s
+            ''', (limit, offset))
             
             articles = cursor.fetchall()
             
@@ -739,9 +964,21 @@ def get_news():
                     'scraped_at': article[12]
                 })
             
+            # Calculate pagination info
+            total_pages = (total_count + limit - 1) // limit
+            has_next = page < total_pages
+            has_prev = page > 1
+            
             return jsonify({
                 'articles': article_list,
-                'count': len(article_list)
+                'pagination': {
+                    'current_page': page,
+                    'total_pages': total_pages,
+                    'total_count': total_count,
+                    'limit': limit,
+                    'has_next': has_next,
+                    'has_prev': has_prev
+                }
             })
         
     except Exception as e:
@@ -1007,6 +1244,15 @@ def run_news_job():
         else:
             print("❌ No Le Monde articles found")
         
+        # Scrape El Pais news
+        print("📰 Scraping El Pais...")
+        elpais_articles = scrape_el_pais_news()
+        if elpais_articles:
+            all_articles.extend(elpais_articles)
+            print(f"✅ Found {len(elpais_articles)} El Pais articles")
+        else:
+            print("❌ No El Pais articles found")
+        
         if not all_articles:
             print("❌ No articles found from any source")
             return
@@ -1034,8 +1280,8 @@ def run_news_job():
                 # Detect category
                 category = detect_category(article['title'], article['content'])
                 
-                # Generate slug from title
-                slug = generate_slug(article['title'])
+                # Generate slug from Portuguese title
+                slug = generate_slug(title_pt)
                 
                 # Ensure slug is unique
                 counter = 1
@@ -1080,14 +1326,14 @@ def run_scheduler():
 
 def setup_scheduler():
     """Setup the scheduled jobs"""
-    # Schedule news job to run every hour
-    schedule.every().hour.do(run_news_job)
+    # Schedule news job to run every 30 minutes
+    schedule.every(30).minutes.do(run_news_job)
     
     # Start scheduler in background thread
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
     
-    print("⏰ Scheduler started - news will be fetched every hour")
+    print("⏰ Scheduler started - news will be fetched every 30 minutes")
     
     # Run initial news fetch in background (non-blocking)
     initial_fetch_thread = threading.Thread(target=run_news_job, daemon=True)

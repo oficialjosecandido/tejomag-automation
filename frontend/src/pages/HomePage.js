@@ -6,23 +6,44 @@ import config from '../config';
 const HomePage = () => {
   const [articles, setArticles] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [pagination, setPagination] = useState(null);
   const location = useLocation();
 
-  const fetchNews = async () => {
-    setLoading(true);
+  const fetchNews = async (page = 1, append = false) => {
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
     
     try {
-      const response = await axios.get(`${config.API_BASE_URL}/api/news`);
-      setArticles(response.data.articles || []);
-      setSearchQuery('');
+      const response = await axios.get(`${config.API_BASE_URL}/api/news?page=${page}&limit=50`);
+      const newArticles = response.data.articles || [];
+      
+      if (append) {
+        setArticles(prev => [...prev, ...newArticles]);
+      } else {
+        setArticles(newArticles);
+        setSearchQuery('');
+      }
+      
+      setPagination(response.data.pagination);
     } catch (err) {
       console.error('Error fetching news:', err);
       setError('Erro ao carregar as notícias. Verifique se o servidor está rodando.');
     } finally {
       setLoading(false);
+      setLoadingMore(false);
+    }
+  };
+
+  const loadMore = () => {
+    if (pagination && pagination.has_next) {
+      fetchNews(pagination.current_page + 1, true);
     }
   };
 
@@ -258,6 +279,33 @@ const HomePage = () => {
       textDecoration: 'none',
       fontSize: '0.9rem'
     },
+    loadMoreButton: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '8px',
+      margin: '3rem auto',
+      padding: '1rem 2rem',
+      backgroundColor: '#1f6cac',
+      color: 'white',
+      border: 'none',
+      borderRadius: '8px',
+      cursor: 'pointer',
+      fontSize: '1rem',
+      fontWeight: '600',
+      transition: 'all 0.3s ease',
+      maxWidth: '200px'
+    },
+    loadMoreButtonDisabled: {
+      backgroundColor: '#9ca3af',
+      cursor: 'not-allowed'
+    },
+    paginationInfo: {
+      textAlign: 'center',
+      marginTop: '2rem',
+      color: '#6b7280',
+      fontSize: '0.9rem'
+    },
   };
 
   return (
@@ -372,6 +420,52 @@ const HomePage = () => {
           </Link>
         ))}
       </div>
+
+      {/* Load More Button */}
+      {!searchQuery && pagination && pagination.has_next && (
+        <div style={{ textAlign: 'center' }}>
+          <button
+            style={{
+              ...styles.loadMoreButton,
+              ...(loadingMore ? styles.loadMoreButtonDisabled : {})
+            }}
+            onClick={loadMore}
+            disabled={loadingMore}
+            onMouseEnter={(e) => {
+              if (!loadingMore) {
+                e.target.style.backgroundColor = '#1557a0';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!loadingMore) {
+                e.target.style.backgroundColor = '#1f6cac';
+              }
+            }}
+          >
+            {loadingMore ? (
+              <>
+                <span>🔄</span>
+                <span>Carregando...</span>
+              </>
+            ) : (
+              <>
+                <span>📄</span>
+                <span>Carregar mais notícias</span>
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* Pagination Info */}
+      {!searchQuery && pagination && (
+        <div style={styles.paginationInfo}>
+          Mostrando {articles.length} de {pagination.total_count} notícias
+          {pagination.total_pages > 1 && (
+            <span> • Página {pagination.current_page} de {pagination.total_pages}</span>
+          )}
+        </div>
+      )}
 
     </div>
   );
