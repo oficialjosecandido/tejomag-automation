@@ -769,7 +769,8 @@ def translate_to_portuguese(text, source_lang='en'):
         # Map source language codes for DeepL
         source_lang_map = {
             'en': 'EN',
-            'fr': 'FR'
+            'fr': 'FR',
+            'es': 'ES'
         }
         source = source_lang_map.get(source_lang.lower(), 'EN')
         
@@ -1271,7 +1272,12 @@ def run_news_job():
             
             if not existing:
                 # Determine source language for better translation
-                source_lang = 'fr' if article['source'] == 'Le Monde' else 'en'
+                if article['source'] == 'Le Monde':
+                    source_lang = 'fr'
+                elif article['source'] == 'El Pais':
+                    source_lang = 'es'
+                else:
+                    source_lang = 'en'  # Default to English for BBC
                 
                 # Translate and store new article
                 title_pt = translate_to_portuguese(article['title'], source_lang)
