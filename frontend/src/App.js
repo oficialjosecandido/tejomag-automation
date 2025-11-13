@@ -5,6 +5,7 @@ import ArticleDetailPage from './pages/ArticleDetailPage';
 import QuemSomosPage from './pages/QuemSomosPage';
 import FichaTecnicaPage from './pages/FichaTecnicaPage';
 import TermosPage from './pages/TermosPage';
+import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
 import Layout from './components/Layout';
 
 function App() {
@@ -17,6 +18,7 @@ function App() {
           <Route path="/quem-somos" element={<QuemSomosPage />} />
           <Route path="/ficha-tecnica" element={<FichaTecnicaPage />} />
           <Route path="/termos" element={<TermosPage />} />
+          <Route path="/privacidade" element={<PrivacyPolicyPage />} />
         </Routes>
       </Layout>
     </Router>

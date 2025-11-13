@@ -222,6 +222,15 @@ const Layout = ({ children }) => {
             >
               Termos e Condições
             </Link>
+            <span style={styles.footerSeparator}>•</span>
+            <Link 
+              to="/privacidade" 
+              style={styles.footerLink}
+              onMouseEnter={(e) => e.target.style.color = '#fff'}
+              onMouseLeave={(e) => e.target.style.color = '#94a3b8'}
+            >
+              Política de Privacidade
+            </Link>
           </div>
           <p style={styles.footerText}>&copy; 2024 TejoMag - Notícias internacionais traduzidas para português</p>
           <p style={{...styles.footerText, fontSize: 'clamp(0.7rem, 1.5vw, 0.8rem)', marginTop: '0.5rem', opacity: '0.7'}}>
