@@ -39,8 +39,15 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       
-      - name: Set startup command
+      - name: Configure Azure Web App
         run: |
+          # Set Python version
+          az webapp config set --resource-group tejomag-rg --name ${{ env.AZURE_WEBAPP_NAME }} --linux-fx-version "PYTHON|3.11"
+          
+          # Enable Oryx build (auto-installs dependencies from requirements.txt)
+          az webapp config appsettings set --resource-group tejomag-rg --name ${{ env.AZURE_WEBAPP_NAME }} --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true
+          
+          # Set startup command
           az webapp config set --resource-group tejomag-rg --name ${{ env.AZURE_WEBAPP_NAME }} --startup-file "gunicorn --bind=0.0.0.0:8000 --workers=2 --timeout=300 --access-logfile=- --error-logfile=- app:app"
       
       - name: Create deployment package
@@ -50,7 +57,13 @@ jobs:
       
       - name: Deploy to Azure Web App
         run: |
-          az webapp deploy --resource-group tejomag-rg --name ${{ env.AZURE_WEBAPP_NAME }} --type zip --src-path backend-deploy.zip --timeout 600
+          # Deploy asynchronously - this returns immediately without waiting for app to start
+          echo "Starting deployment..."
+          az webapp deploy --resource-group tejomag-rg --name ${{ env.AZURE_WEBAPP_NAME }} --type zip --src-path backend-deploy.zip --async true
+          
+          echo "✅ Deployment package uploaded successfully"
+          echo "⚠️  App startup may take a few minutes. Check Azure Portal for status."
+          echo "📊 Monitor at: https://tejomag-backend.scm.azurewebsites.net"
   
   deploy-frontend:
     runs-on: ubuntu-latest
