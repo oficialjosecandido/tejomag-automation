@@ -39,18 +39,18 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       
-      - name: Deploy to Azure Web App using CLI
+      - name: Set startup command
         run: |
-          # Create a zip file of the backend
-          cd backend
-          zip -r ../backend-deploy.zip . -x "*.pyc" "__pycache__/*" "*.db"
-          cd ..
-          
-          # Deploy using Azure CLI
-          az webapp deployment source config-zip --resource-group tejomag-rg --name ${{ env.AZURE_WEBAPP_NAME }} --src backend-deploy.zip
-          
-          # Set startup command for Azure App Service
           az webapp config set --resource-group tejomag-rg --name ${{ env.AZURE_WEBAPP_NAME }} --startup-file "gunicorn --bind=0.0.0.0:8000 --workers=2 --timeout=300 --access-logfile=- --error-logfile=- app:app"
+      
+      - name: Create deployment package
+        run: |
+          cd backend
+          zip -r ../backend-deploy.zip . -x "*.pyc" "__pycache__/*" "*.db" "*.log" ".git/*" "venv/*" ".env"
+      
+      - name: Deploy to Azure Web App
+        run: |
+          az webapp deploy --resource-group tejomag-rg --name ${{ env.AZURE_WEBAPP_NAME }} --type zip --src-path backend-deploy.zip --timeout 600
   
   deploy-frontend:
     runs-on: ubuntu-latest
