@@ -59,6 +59,15 @@ const ArticleDetailPage = () => {
         document.head.appendChild(meta);
       }
 
+      // Add canonical URL
+      let canonicalLink = document.querySelector('link[rel="canonical"]');
+      if (!canonicalLink) {
+        canonicalLink = document.createElement('link');
+        canonicalLink.setAttribute('rel', 'canonical');
+        document.head.appendChild(canonicalLink);
+      }
+      canonicalLink.setAttribute('href', window.location.href);
+
       // Add Open Graph tags for social sharing
       updateMetaTag('og:title', article.title_pt || article.title);
       updateMetaTag('og:description', description);

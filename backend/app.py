@@ -141,25 +141,25 @@ def init_db():
     try:
         logger.info("📊 Initializing database...")
         conn = get_db_connection()
-        cursor = conn.cursor()
+    cursor = conn.cursor()
         
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS articles (
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS articles (
                 id SERIAL PRIMARY KEY,
-                title TEXT NOT NULL,
-                title_pt TEXT NOT NULL,
-                content TEXT NOT NULL,
-                content_pt TEXT NOT NULL,
-                image_url TEXT,
+            title TEXT NOT NULL,
+            title_pt TEXT NOT NULL,
+            content TEXT NOT NULL,
+            content_pt TEXT NOT NULL,
+            image_url TEXT,
                 images TEXT,
                 slug TEXT UNIQUE,
                 url TEXT NOT NULL UNIQUE,
-                source TEXT NOT NULL,
-                category TEXT DEFAULT 'Geral',
+            source TEXT NOT NULL,
+            category TEXT DEFAULT 'Geral',
                 published_date TIMESTAMP,
                 scraped_at TIMESTAMP
-            )
-        ''')
+        )
+    ''')
         
         # Create index on slug for faster lookups
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_articles_slug ON articles(slug)')
@@ -167,7 +167,7 @@ def init_db():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_articles_category ON articles(category)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_articles_scraped_at ON articles(scraped_at DESC)')
         
-        conn.commit()
+    conn.commit()
         logger.info("✅ Database initialized successfully")
         
     except Exception as e:
@@ -365,7 +365,7 @@ def scrape_article_content(url):
                         
                         # Set the first image as the main image
                         if image_url is None:
-                            image_url = src
+                    image_url = src
         
         if title and content and len(content) > 100:
             return {
@@ -549,7 +549,7 @@ def scrape_le_monde_article_content(url):
                         
                         # Set the first meaningful image as the main image
                         if image_url is None:
-                            image_url = src
+                    image_url = src
         
         # If no meaningful image found, try to extract from article metadata
         if not image_url:
@@ -1068,18 +1068,18 @@ def get_news():
             total_count = cursor.fetchone()[0]
             
             # Get paginated articles
-            cursor.execute('''
+        cursor.execute('''
                 SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
-                FROM articles 
-                ORDER BY scraped_at DESC
+            FROM articles 
+            ORDER BY scraped_at DESC
                 LIMIT %s OFFSET %s
             ''', (limit, offset))
-            
-            articles = cursor.fetchall()
-            
-            # Convert to list of dictionaries
-            article_list = []
-            for article in articles:
+        
+        articles = cursor.fetchall()
+        
+        # Convert to list of dictionaries
+        article_list = []
+        for article in articles:
                 import json
                 images = []
                 try:
@@ -1088,13 +1088,13 @@ def get_news():
                 except:
                     pass
                     
-                article_list.append({
-                    'id': article[0],
-                    'title': article[1],
-                    'title_pt': article[2],
-                    'content': article[3],
-                    'content_pt': article[4],
-                    'image_url': article[5],
+            article_list.append({
+                'id': article[0],
+                'title': article[1],
+                'title_pt': article[2],
+                'content': article[3],
+                'content_pt': article[4],
+                'image_url': article[5],
                     'images': images,
                     'slug': article[7],
                     'url': article[8],
@@ -1109,8 +1109,8 @@ def get_news():
             has_next = page < total_pages
             has_prev = page > 1
             
-            return jsonify({
-                'articles': article_list,
+        return jsonify({
+            'articles': article_list,
                 'pagination': {
                     'current_page': page,
                     'total_pages': total_pages,
@@ -1119,7 +1119,7 @@ def get_news():
                     'has_next': has_next,
                     'has_prev': has_prev
                 }
-            })
+        })
         
     except Exception as e:
         logger.error(f"Error fetching news: {e}")
@@ -1265,6 +1265,63 @@ def search_news():
     finally:
         if conn:
             release_db_connection(conn)
+
+@app.route('/sitemap.xml', methods=['GET'])
+def sitemap():
+    """Generate XML sitemap for all articles"""
+    from flask import Response
+    from datetime import datetime
+    
+    try:
+        with get_db_cursor() as cursor:
+            # Get all articles with slugs
+            cursor.execute('''
+                SELECT slug, scraped_at
+                FROM articles
+                WHERE slug IS NOT NULL
+                ORDER BY scraped_at DESC
+            ''')
+            
+            articles = cursor.fetchall()
+            
+            # Start building XML sitemap
+            xml = ['<?xml version="1.0" encoding="UTF-8"?>']
+            xml.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
+            
+            # Add homepage
+            xml.append('  <url>')
+            xml.append('    <loc>https://tejomag.pt/</loc>')
+            xml.append('    <lastmod>' + datetime.now().strftime('%Y-%m-%d') + '</lastmod>')
+            xml.append('    <changefreq>hourly</changefreq>')
+            xml.append('    <priority>1.0</priority>')
+            xml.append('  </url>')
+            
+            # Add all article pages
+            for article in articles:
+                slug = article[0]
+                scraped_at = article[1]
+                
+                # Format date
+                if scraped_at:
+                    lastmod = scraped_at.strftime('%Y-%m-%d') if isinstance(scraped_at, datetime) else datetime.fromisoformat(str(scraped_at)).strftime('%Y-%m-%d')
+                else:
+                    lastmod = datetime.now().strftime('%Y-%m-%d')
+                
+                xml.append('  <url>')
+                xml.append(f'    <loc>https://tejomag.pt/article/{slug}</loc>')
+                xml.append(f'    <lastmod>{lastmod}</lastmod>')
+                xml.append('    <changefreq>weekly</changefreq>')
+                xml.append('    <priority>0.8</priority>')
+                xml.append('  </url>')
+            
+            xml.append('</urlset>')
+            
+            # Return XML response
+            return Response('\n'.join(xml), mimetype='application/xml')
+            
+    except Exception as e:
+        logger.error(f"Sitemap generation error: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/news/category/<category>', methods=['GET'])
 def get_news_by_category(category):
