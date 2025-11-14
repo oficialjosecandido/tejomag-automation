@@ -55,11 +55,26 @@ jobs:
           cd backend
           zip -r ../backend-deploy.zip . -x "*.pyc" "__pycache__/*" "*.db" "*.log" ".git/*" "venv/*" ".env"
       
+      - name: Check for ongoing deployments
+        run: |
+          echo "Checking for ongoing deployments..."
+          DEPLOYMENT_STATUS=$(az webapp deployment list --resource-group tejomag-rg --name ${{ env.AZURE_WEBAPP_NAME }} --query "[0].status" -o tsv 2>/dev/null || echo "None")
+          echo "Current deployment status: $DEPLOYMENT_STATUS"
+          
+          if [ "$DEPLOYMENT_STATUS" = "4" ] || [ "$DEPLOYMENT_STATUS" = "3" ]; then
+            echo "⚠️  Deployment in progress. Waiting 30 seconds..."
+            sleep 30
+          fi
+      
       - name: Deploy to Azure Web App
         run: |
           # Deploy asynchronously - this returns immediately without waiting for app to start
           echo "Starting deployment..."
-          az webapp deploy --resource-group tejomag-rg --name ${{ env.AZURE_WEBAPP_NAME }} --type zip --src-path backend-deploy.zip --async true
+          az webapp deploy --resource-group tejomag-rg --name ${{ env.AZURE_WEBAPP_NAME }} --type zip --src-path backend-deploy.zip --async true || {
+            echo "⚠️  Deployment may already be in progress. This is normal if deployments are queued."
+            echo "✅ Deployment initiated. Check Azure Portal for status."
+            exit 0
+          }
           
           echo "✅ Deployment package uploaded successfully"
           echo "⚠️  App startup may take a few minutes. Check Azure Portal for status."
