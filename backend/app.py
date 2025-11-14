@@ -365,7 +365,7 @@ def scrape_article_content(url):
                         
                         # Set the first image as the main image
                         if image_url is None:
-                    image_url = src
+                            image_url = src
         
         if title and content and len(content) > 100:
             return {
@@ -549,7 +549,7 @@ def scrape_le_monde_article_content(url):
                         
                         # Set the first meaningful image as the main image
                         if image_url is None:
-                    image_url = src
+                            image_url = src
         
         # If no meaningful image found, try to extract from article metadata
         if not image_url:
@@ -1087,8 +1087,8 @@ def get_news():
                         images = json.loads(article[6])
                 except:
                     pass
-                    
-            article_list.append({
+                
+                article_list.append({
                 'id': article[0],
                 'title': article[1],
                 'title_pt': article[2],
@@ -1103,11 +1103,11 @@ def get_news():
                     'published_date': article[11],
                     'scraped_at': article[12]
                 })
-            
-            # Calculate pagination info
-            total_pages = (total_count + limit - 1) // limit
-            has_next = page < total_pages
-            has_prev = page > 1
+        
+        # Calculate pagination info
+        total_pages = (total_count + limit - 1) // limit
+        has_next = page < total_pages
+        has_prev = page > 1
             
         return jsonify({
             'articles': article_list,
