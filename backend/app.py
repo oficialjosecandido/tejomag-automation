@@ -1316,8 +1316,11 @@ def sitemap():
             
             xml.append('</urlset>')
             
-            # Return XML response
-            return Response('\n'.join(xml), mimetype='application/xml')
+            # Return XML response with proper headers
+            response = Response('\n'.join(xml), mimetype='application/xml')
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Content-Type'] = 'application/xml; charset=utf-8'
+            return response
             
     except Exception as e:
         logger.error(f"Sitemap generation error: {e}")

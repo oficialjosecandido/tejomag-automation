@@ -36,10 +36,11 @@ This guide will help you get your article pages indexed on Google Search Console
 ### Step 2: Submit Your Sitemap
 
 1. After verification, go to **Sitemaps** in the left menu
-2. Enter your sitemap URL:
+2. Enter your sitemap URL (must be on the same domain as your website):
    ```
-   https://tejomag-backend.azurewebsites.net/sitemap.xml
+   https://tejomag.pt/sitemap.xml
    ```
+   **Important**: Use the frontend domain (`tejomag.pt`), not the backend domain. The sitemap is automatically proxied from the backend.
 3. Click **"Submit"**
 
 **Note**: Google will automatically discover new articles from the sitemap and index them.
