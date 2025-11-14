@@ -141,9 +141,9 @@ def init_db():
     try:
         logger.info("📊 Initializing database...")
         conn = get_db_connection()
-    cursor = conn.cursor()
+        cursor = conn.cursor()
         
-    cursor.execute('''
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS articles (
                 id SERIAL PRIMARY KEY,
             title TEXT NOT NULL,
@@ -159,7 +159,7 @@ def init_db():
                 published_date TIMESTAMP,
                 scraped_at TIMESTAMP
         )
-    ''')
+        ''')
         
         # Create index on slug for faster lookups
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_articles_slug ON articles(slug)')
@@ -167,7 +167,7 @@ def init_db():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_articles_category ON articles(category)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_articles_scraped_at ON articles(scraped_at DESC)')
         
-    conn.commit()
+        conn.commit()
         logger.info("✅ Database initialized successfully")
         
     except Exception as e:
