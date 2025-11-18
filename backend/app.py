@@ -1016,7 +1016,7 @@ def post_to_linkedin(article):
             return False
             
     except Exception as e:
-        logger.error(f"Error posting to LinkedIn: {e}")
+        logger.error(f"Error posting to LinkedIn: {e}", exc_info=True)
         return False
 
 def detect_category(title, content):

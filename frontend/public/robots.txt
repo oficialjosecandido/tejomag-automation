@@ -2,7 +2,8 @@ User-agent: *
 Allow: /
 
 # Sitemap location
-Sitemap: https://tejomag.pt/sitemap.xml
+# Using backend sitemap until Azure Function is deployed
+Sitemap: https://tejomag-backend.azurewebsites.net/sitemap.xml
 
 # Disallow admin or private areas (if any)
 # Disallow: /admin/
