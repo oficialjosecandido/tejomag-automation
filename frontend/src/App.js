@@ -13,7 +13,7 @@ function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/sitemap.xml" element={<SitemapPage />} />
+        <Route path="/sitemap" element={<SitemapPage />} />
         <Route path="/" element={<Layout><HomePage /></Layout>} />
         <Route path="/article/:slug" element={<Layout><ArticleDetailPage /></Layout>} />
         <Route path="/quem-somos" element={<Layout><QuemSomosPage /></Layout>} />
