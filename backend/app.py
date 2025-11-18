@@ -1068,19 +1068,19 @@ def get_news():
             total_count = cursor.fetchone()[0]
             
             # Get paginated articles
-        cursor.execute('''
+            cursor.execute('''
                 SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
-            FROM articles 
-            ORDER BY scraped_at DESC
+                FROM articles 
+                ORDER BY scraped_at DESC
                 LIMIT %s OFFSET %s
             ''', (limit, offset))
-        
-        articles = cursor.fetchall()
-        
-        # Convert to list of dictionaries
-        article_list = []
-        for article in articles:
-                import json
+            
+            articles = cursor.fetchall()
+            
+            # Convert to list of dictionaries
+            import json
+            article_list = []
+            for article in articles:
                 images = []
                 try:
                     if article[6]:  # images column
@@ -1089,12 +1089,12 @@ def get_news():
                     pass
                 
                 article_list.append({
-                'id': article[0],
-                'title': article[1],
-                'title_pt': article[2],
-                'content': article[3],
-                'content_pt': article[4],
-                'image_url': article[5],
+                    'id': article[0],
+                    'title': article[1],
+                    'title_pt': article[2],
+                    'content': article[3],
+                    'content_pt': article[4],
+                    'image_url': article[5],
                     'images': images,
                     'slug': article[7],
                     'url': article[8],
@@ -1103,22 +1103,22 @@ def get_news():
                     'published_date': article[11],
                     'scraped_at': article[12]
                 })
-        
-        # Calculate pagination info
-        total_pages = (total_count + limit - 1) // limit
-        has_next = page < total_pages
-        has_prev = page > 1
             
+            # Calculate pagination info
+            total_pages = (total_count + limit - 1) // limit
+            has_next = page < total_pages
+            has_prev = page > 1
+        
         return jsonify({
             'articles': article_list,
-                'pagination': {
-                    'current_page': page,
-                    'total_pages': total_pages,
-                    'total_count': total_count,
-                    'limit': limit,
-                    'has_next': has_next,
-                    'has_prev': has_prev
-                }
+            'pagination': {
+                'current_page': page,
+                'total_pages': total_pages,
+                'total_count': total_count,
+                'limit': limit,
+                'has_next': has_next,
+                'has_prev': has_prev
+            }
         })
         
     except Exception as e:
