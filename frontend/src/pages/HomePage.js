@@ -64,16 +64,126 @@ const HomePage = () => {
   };
 
   useEffect(() => {
-    // Check if there's a search query in URL
+    // Set canonical URL for SEO
+    const baseUrl = window.location.origin;
+    const canonicalUrl = location.search ? `${baseUrl}${location.pathname}${location.search}` : `${baseUrl}${location.pathname}`;
+    
+    let canonicalLink = document.querySelector('link[rel="canonical"]');
+    if (!canonicalLink) {
+      canonicalLink = document.createElement('link');
+      canonicalLink.setAttribute('rel', 'canonical');
+      document.head.appendChild(canonicalLink);
+    }
+    canonicalLink.setAttribute('href', canonicalUrl);
+    
+    // Update page title
     const params = new URLSearchParams(location.search);
     const query = params.get('search');
+    if (query) {
+      document.title = `Pesquisa: ${query} | TejoMag - Notícias em Português`;
+    } else {
+      document.title = 'TejoMag - Notícias Internacionais em Português';
+    }
     
+    // Update meta description
+    const description = query 
+      ? `Resultados da pesquisa por "${query}" no TejoMag - Notícias internacionais traduzidas para português.`
+      : 'TejoMag - Informação além das margens. Notícias internacionais traduzidas para português das melhores fontes: BBC, Le Monde, El País.';
+    updateMetaTag('description', description);
+    
+    // Update Open Graph tags
+    updateMetaTag('og:title', document.title);
+    updateMetaTag('og:description', description);
+    updateMetaTag('og:url', canonicalUrl);
+    updateMetaTag('og:type', 'website');
+    updateMetaTag('og:site_name', 'TejoMag');
+    updateMetaTag('og:locale', 'pt_PT');
+    
+    // Update Twitter Card
+    updateMetaTag('twitter:title', document.title);
+    updateMetaTag('twitter:description', description);
+    
+    // Add structured data for homepage
+    addHomePageStructuredData(articles);
+    
+    // Check if there's a search query in URL
     if (query) {
       searchNews(query);
     } else {
       fetchNews();
     }
-  }, [location.search]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.search, location.pathname]);
+  
+  const updateMetaTag = (property, content) => {
+    if (!content) return;
+    
+    let meta = document.querySelector(`meta[property="${property}"]`);
+    if (!meta) {
+      meta = document.querySelector(`meta[name="${property}"]`);
+    }
+    
+    if (meta) {
+      meta.setAttribute('content', content);
+    } else {
+      meta = document.createElement('meta');
+      if (property.startsWith('og:') || property.startsWith('twitter:')) {
+        meta.setAttribute('property', property);
+      } else {
+        meta.setAttribute('name', property);
+      }
+      meta.setAttribute('content', content);
+      document.head.appendChild(meta);
+    }
+  };
+  
+  const addHomePageStructuredData = (articles) => {
+    // Remove existing homepage structured data
+    const existingScripts = document.querySelectorAll('script[type="application/ld+json"]');
+    existingScripts.forEach(script => {
+      try {
+        const data = JSON.parse(script.textContent);
+        if (data['@type'] === 'ItemList' || (data['@type'] === 'WebSite' && data.potentialAction)) {
+          script.remove();
+        }
+      } catch (e) {
+        // If not JSON, keep it
+      }
+    });
+
+    // Add ItemList structured data for articles
+    if (articles && articles.length > 0) {
+      const itemList = {
+        "@context": "https://schema.org",
+        "@type": "ItemList",
+        "itemListElement": articles.slice(0, 10).map((article, index) => ({
+          "@type": "ListItem",
+          "position": index + 1,
+          "item": {
+            "@type": "NewsArticle",
+            "headline": article.title_pt || article.title,
+            "description": (article.content_pt || article.content).substring(0, 150),
+            "image": article.image_url,
+            "url": `${window.location.origin}/article/${article.slug}`,
+            "datePublished": article.published_date || article.scraped_at,
+            "author": {
+              "@type": "Organization",
+              "name": article.source
+            },
+            "publisher": {
+              "@type": "Organization",
+              "name": "TejoMag"
+            }
+          }
+        }))
+      };
+
+      const script = document.createElement('script');
+      script.type = 'application/ld+json';
+      script.text = JSON.stringify(itemList);
+      document.head.appendChild(script);
+    }
+  };
 
   const formatDate = (dateString) => {
     if (!dateString) return 'Data não disponível';

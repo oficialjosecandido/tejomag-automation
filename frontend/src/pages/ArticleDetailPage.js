@@ -19,20 +19,35 @@ const ArticleDetailPage = () => {
           response = await axios.get(`${config.API_BASE_URL}/api/news/slug/${slug}`);
           setArticle(response.data);
         } catch (slugError) {
-          // If slug fails, try as ID (for backward compatibility)
-          const allResponse = await axios.get(`${config.API_BASE_URL}/api/news`);
-          const articles = allResponse.data.articles || [];
-          const foundArticle = articles.find(a => a.id.toString() === slug);
-          
-          if (foundArticle) {
-            setArticle(foundArticle);
-          } else {
+          // If 404, article doesn't exist
+          if (slugError.response && slugError.response.status === 404) {
             setError('Artigo não encontrado');
+            setLoading(false);
+            return;
+          }
+          
+          // If slug fails with other error, try as ID (for backward compatibility)
+          try {
+            const allResponse = await axios.get(`${config.API_BASE_URL}/api/news`);
+            const articles = allResponse.data.articles || [];
+            const foundArticle = articles.find(a => a.id.toString() === slug);
+            
+            if (foundArticle) {
+              setArticle(foundArticle);
+            } else {
+              setError('Artigo não encontrado');
+            }
+          } catch (idError) {
+            setError('Erro ao carregar o artigo');
           }
         }
       } catch (err) {
         console.error('Error fetching article:', err);
-        setError('Erro ao carregar o artigo');
+        if (err.response && err.response.status === 404) {
+          setError('Artigo não encontrado');
+        } else {
+          setError('Erro ao carregar o artigo');
+        }
       } finally {
         setLoading(false);
       }
@@ -44,19 +59,45 @@ const ArticleDetailPage = () => {
   // SEO: Update document title and meta tags when article loads
   useEffect(() => {
     if (article) {
+      const articleUrl = window.location.href;
+      const articleTitle = article.title_pt || article.title;
+      const articleContent = article.content_pt || article.content;
+      
+      // Create better meta description (first 155 characters, end at word boundary)
+      let description = articleContent.substring(0, 155);
+      const lastSpace = description.lastIndexOf(' ');
+      if (lastSpace > 100) {
+        description = description.substring(0, lastSpace);
+      }
+      description = description.trim() + '...';
+      
       // Update page title
-      document.title = `${article.title_pt || article.title} | TejoMag`;
+      document.title = `${articleTitle} | TejoMag`;
       
       // Update or create meta description
-      const metaDescription = document.querySelector('meta[name="description"]');
-      const description = (article.content_pt || article.content).substring(0, 160) + '...';
-      if (metaDescription) {
-        metaDescription.setAttribute('content', description);
-      } else {
-        const meta = document.createElement('meta');
-        meta.name = 'description';
-        meta.content = description;
-        document.head.appendChild(meta);
+      updateMetaTag('description', description);
+      
+      // Add language tag
+      updateMetaTag('language', 'pt-PT');
+      
+      // Add keywords
+      const keywords = [
+        article.category,
+        article.source,
+        'notícias',
+        'internacional',
+        'português',
+        'atualidades'
+      ].filter(Boolean).join(', ');
+      updateMetaTag('keywords', keywords);
+      
+      // Add article meta tags
+      updateMetaTag('article:published_time', article.published_date || article.scraped_at);
+      updateMetaTag('article:modified_time', article.scraped_at);
+      updateMetaTag('article:author', article.source);
+      updateMetaTag('article:section', article.category);
+      if (article.category) {
+        updateMetaTag('article:tag', article.category);
       }
 
       // Add canonical URL
@@ -66,23 +107,36 @@ const ArticleDetailPage = () => {
         canonicalLink.setAttribute('rel', 'canonical');
         document.head.appendChild(canonicalLink);
       }
-      canonicalLink.setAttribute('href', window.location.href);
+      canonicalLink.setAttribute('href', articleUrl);
 
       // Add Open Graph tags for social sharing
-      updateMetaTag('og:title', article.title_pt || article.title);
+      updateMetaTag('og:title', articleTitle);
       updateMetaTag('og:description', description);
-      updateMetaTag('og:image', article.image_url);
-      updateMetaTag('og:url', window.location.href);
+      updateMetaTag('og:image', article.image_url || `${window.location.origin}/og-image.jpg`);
+      updateMetaTag('og:url', articleUrl);
       updateMetaTag('og:type', 'article');
+      updateMetaTag('og:site_name', 'TejoMag');
+      updateMetaTag('og:locale', 'pt_PT');
+      updateMetaTag('og:article:author', article.source);
+      updateMetaTag('og:article:published_time', article.published_date || article.scraped_at);
+      updateMetaTag('og:article:modified_time', article.scraped_at);
+      updateMetaTag('og:article:section', article.category);
+      if (article.category) {
+        updateMetaTag('og:article:tag', article.category);
+      }
       
       // Add Twitter Card tags
       updateMetaTag('twitter:card', 'summary_large_image');
-      updateMetaTag('twitter:title', article.title_pt || article.title);
+      updateMetaTag('twitter:title', articleTitle);
       updateMetaTag('twitter:description', description);
-      updateMetaTag('twitter:image', article.image_url);
+      updateMetaTag('twitter:image', article.image_url || `${window.location.origin}/og-image.jpg`);
+      updateMetaTag('twitter:site', '@tejomag');
 
       // Add JSON-LD structured data
-      addStructuredData(article);
+      addStructuredData(article, articleUrl, description);
+      
+      // Add breadcrumb structured data
+      addBreadcrumbStructuredData(article);
     }
   }, [article]);
 
@@ -98,7 +152,7 @@ const ArticleDetailPage = () => {
       meta.setAttribute('content', content);
     } else {
       meta = document.createElement('meta');
-      if (property.startsWith('og:') || property.startsWith('twitter:')) {
+      if (property.startsWith('og:') || property.startsWith('article:')) {
         meta.setAttribute('property', property);
       } else {
         meta.setAttribute('name', property);
@@ -108,45 +162,105 @@ const ArticleDetailPage = () => {
     }
   };
 
-  const addStructuredData = (article) => {
-    // Remove existing structured data
-    const existingScript = document.querySelector('script[type="application/ld+json"]');
-    if (existingScript) {
-      existingScript.remove();
-    }
+  const addStructuredData = (article, articleUrl, description) => {
+    // Remove existing article structured data
+    const existingScripts = document.querySelectorAll('script[type="application/ld+json"]');
+    existingScripts.forEach(script => {
+      try {
+        const data = JSON.parse(script.textContent);
+        if (data['@type'] === 'NewsArticle' || data['@type'] === 'BreadcrumbList') {
+          script.remove();
+        }
+      } catch (e) {
+        // If not JSON, keep it
+      }
+    });
 
-    // Create new structured data
+    // Format dates properly
+    const publishedDate = article.published_date || article.scraped_at;
+    const modifiedDate = article.scraped_at;
+    
+    // Create comprehensive NewsArticle structured data
     const structuredData = {
       "@context": "https://schema.org",
       "@type": "NewsArticle",
       "headline": article.title_pt || article.title,
-      "description": (article.content_pt || article.content).substring(0, 200),
-      "image": article.image_url,
+      "description": description,
+      "image": article.image_url ? [article.image_url] : [],
       "author": {
         "@type": "Organization",
-        "name": article.source
+        "name": article.source,
+        "url": article.url
       },
       "publisher": {
         "@type": "Organization",
         "name": "TejoMag",
         "logo": {
           "@type": "ImageObject",
-          "url": window.location.origin + "/logo.png"
+          "url": `${window.location.origin}/logo.png`,
+          "width": 600,
+          "height": 60
         }
       },
-      "datePublished": article.scraped_at,
-      "dateModified": article.scraped_at,
+      "datePublished": publishedDate,
+      "dateModified": modifiedDate,
       "mainEntityOfPage": {
         "@type": "WebPage",
-        "@id": window.location.href
+        "@id": articleUrl
       },
-      "articleSection": article.category,
-      "inLanguage": "pt-PT"
+      "articleSection": article.category || "Geral",
+      "inLanguage": "pt-PT",
+      "keywords": [
+        article.category,
+        article.source,
+        "notícias",
+        "internacional",
+        "português"
+      ].filter(Boolean).join(", "),
+      "wordCount": (article.content_pt || article.content).split(/\s+/).length,
+      "url": articleUrl
     };
+
+    // Add images if available
+    if (article.images && Array.isArray(article.images) && article.images.length > 0) {
+      structuredData.image = [article.image_url, ...article.images.slice(0, 3)].filter(Boolean);
+    }
 
     const script = document.createElement('script');
     script.type = 'application/ld+json';
     script.text = JSON.stringify(structuredData);
+    document.head.appendChild(script);
+  };
+
+  const addBreadcrumbStructuredData = (article) => {
+    const breadcrumbData = {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Início",
+          "item": window.location.origin
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": article.category || "Artigo",
+          "item": `${window.location.origin}/?category=${encodeURIComponent(article.category || 'Geral')}`
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": article.title_pt || article.title,
+          "item": window.location.href
+        }
+      ]
+    };
+
+    const script = document.createElement('script');
+    script.type = 'application/ld+json';
+    script.text = JSON.stringify(breadcrumbData);
     document.head.appendChild(script);
   };
 
@@ -419,6 +533,8 @@ const ArticleDetailPage = () => {
             src={article.image_url} 
             alt={article.title_pt || article.title}
             style={styles.articleImage}
+            loading="eager"
+            fetchPriority="high"
             onError={(e) => {
               e.target.style.display = 'none';
             }}
@@ -444,12 +560,15 @@ const ArticleDetailPage = () => {
           </h1>
           
           <div style={styles.articleMeta}>
-            <span>Publicado em: {formatDate(article.scraped_at)}</span>
+            <time dateTime={article.published_date || article.scraped_at}>
+              Publicado em: {formatDate(article.published_date || article.scraped_at)}
+            </time>
             <a 
               href={article.url} 
               target="_blank" 
               rel="noopener noreferrer"
               style={styles.originalLink}
+              aria-label={`Ver artigo original em ${article.source}`}
             >
               <span>🔗</span>
               <span>Conteúdo original: {article.source}</span>
@@ -471,7 +590,7 @@ const ArticleDetailPage = () => {
             </button>
           </div>
 
-          <div style={styles.articleBody}>
+          <div style={styles.articleBody} itemProp="articleBody">
             {article.content_pt || article.content}
           </div>
 

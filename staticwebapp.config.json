@@ -5,13 +5,14 @@
       "rewrite": "/api/sitemap",
       "statusCode": 200,
       "headers": {
-        "Content-Type": "application/xml; charset=utf-8"
+        "Content-Type": "application/xml; charset=utf-8",
+        "Access-Control-Allow-Origin": "*"
       }
     }
   ],
   "navigationFallback": {
     "rewrite": "/index.html",
-    "exclude": ["/images/*.{png,jpg,gif}", "/static/*", "*.xml"]
+    "exclude": ["/images/*.{png,jpg,gif}", "/static/*", "*.xml", "/sitemap.xml"]
   },
   "responseOverrides": {
     "404": {

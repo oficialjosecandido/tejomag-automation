@@ -135,6 +135,23 @@ def before_request():
     """Initialize app on first request"""
     ensure_app_initialized()
 
+@app.errorhandler(404)
+def not_found(error):
+    """Handle 404 errors"""
+    return jsonify({'error': 'Not found'}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    """Handle 500 errors"""
+    logger.error(f"Internal server error: {error}")
+    return jsonify({'error': 'Internal server error'}), 500
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Handle all unhandled exceptions"""
+    logger.error(f"Unhandled exception: {e}", exc_info=True)
+    return jsonify({'error': 'An unexpected error occurred'}), 500
+
 # Database setup
 def init_db():
     conn = None
@@ -932,8 +949,11 @@ def format_linkedin_post(article):
         post_text += hashtags.get(category, '#Notícias #Informação #Portugal')
         post_text += "\n\n#TejoMag #InformaçãoAlémDasMargens"
         
-        # Add link to original article
-        if url:
+        # Add link to TejoMag article (prefer slug-based URL)
+        if article.get('slug'):
+            tejomag_url = f"https://tejomag.pt/article/{article['slug']}"
+            post_text += f"\n\n🔗 Leia mais: {tejomag_url}"
+        elif url:
             post_text += f"\n\n🔗 Leia mais: {url}"
         
         return post_text
@@ -1121,9 +1141,12 @@ def get_news():
             }
         })
         
+    except ValueError as e:
+        logger.error(f"Invalid pagination parameters: {e}")
+        return jsonify({'error': 'Invalid pagination parameters'}), 400
     except Exception as e:
-        logger.error(f"Error fetching news: {e}")
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error fetching news: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to fetch news articles'}), 500
 
 @app.route('/', methods=['GET'])
 def root():
@@ -1224,47 +1247,49 @@ def search_news():
     if not query:
         return jsonify({'error': 'Query parameter is required'}), 400
     
-    conn = None
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Search in both title and content using PostgreSQL ILIKE for case-insensitive search
-        search_term = f'%{query}%'
-        cursor.execute('''
-            SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
-            FROM articles 
-            WHERE title_pt ILIKE %s OR content_pt ILIKE %s OR title ILIKE %s OR content ILIKE %s
-            ORDER BY scraped_at DESC
-            LIMIT 50
-        ''', (search_term, search_term, search_term, search_term))
-        
-        articles = []
-        for row in cursor.fetchall():
-            articles.append({
-                'id': row[0],
-                'title': row[1],
-                'title_pt': row[2],
-                'content': row[3],
-                'content_pt': row[4],
-                'image_url': row[5],
-                'images': row[6],
-                'slug': row[7],
-                'url': row[8],
-                'source': row[9],
-                'category': row[10],
-                'published_date': row[11],
-                'scraped_at': row[12]
-            })
-        
-        return jsonify({'articles': articles, 'query': query, 'count': len(articles)})
+        with get_db_cursor() as cursor:
+            # Search in both title and content using PostgreSQL ILIKE for case-insensitive search
+            search_term = f'%{query}%'
+            cursor.execute('''
+                SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
+                FROM articles 
+                WHERE title_pt ILIKE %s OR content_pt ILIKE %s OR title ILIKE %s OR content ILIKE %s
+                ORDER BY scraped_at DESC
+                LIMIT 50
+            ''', (search_term, search_term, search_term, search_term))
+            
+            articles = []
+            for row in cursor.fetchall():
+                import json
+                images = []
+                try:
+                    if row[6]:  # images column
+                        images = json.loads(row[6])
+                except:
+                    pass
+                
+                articles.append({
+                    'id': row[0],
+                    'title': row[1],
+                    'title_pt': row[2],
+                    'content': row[3],
+                    'content_pt': row[4],
+                    'image_url': row[5],
+                    'images': images,
+                    'slug': row[7],
+                    'url': row[8],
+                    'source': row[9],
+                    'category': row[10],
+                    'published_date': row[11],
+                    'scraped_at': row[12]
+                })
+            
+            return jsonify({'articles': articles, 'query': query, 'count': len(articles)})
         
     except Exception as e:
         logger.error(f"Search error: {e}")
         return jsonify({'error': str(e)}), 500
-    finally:
-        if conn:
-            release_db_connection(conn)
 
 @app.route('/sitemap.xml', methods=['GET'])
 def sitemap():
@@ -1329,24 +1354,72 @@ def sitemap():
 @app.route('/api/news/category/<category>', methods=['GET'])
 def get_news_by_category(category):
     """Get news articles by category"""
-    conn = None
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        with get_db_cursor() as cursor:
+            # Get articles from the specified category
+            cursor.execute('''
+                SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
+                FROM articles 
+                WHERE category = %s 
+                ORDER BY scraped_at DESC
+            ''', (category,))
+            
+            articles = cursor.fetchall()
+            
+            # Convert to list of dictionaries
+            import json
+            article_list = []
+            for article in articles:
+                images = []
+                try:
+                    if article[6]:  # images column
+                        images = json.loads(article[6])
+                except:
+                    pass
+                    
+                article_list.append({
+                    'id': article[0],
+                    'title': article[1],
+                    'title_pt': article[2],
+                    'content': article[3],
+                    'content_pt': article[4],
+                    'image_url': article[5],
+                    'images': images,
+                    'slug': article[7],
+                    'url': article[8],
+                    'source': article[9],
+                    'category': article[10],
+                    'published_date': article[11],
+                    'scraped_at': article[12]
+                })
+            
+            return jsonify({
+                'articles': article_list,
+                'category': category,
+                'count': len(article_list)
+            })
         
-        # Get articles from the specified category
-        cursor.execute('''
-            SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
-            FROM articles 
-            WHERE category = %s 
-            ORDER BY scraped_at DESC
-        ''', (category,))
-        
-        articles = cursor.fetchall()
-        
-        # Convert to list of dictionaries
-        article_list = []
-        for article in articles:
+    except Exception as e:
+        logger.error(f"Error fetching category {category}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/news/slug/<slug>', methods=['GET'])
+def get_news_by_slug(slug):
+    """Get a single article by slug"""
+    try:
+        with get_db_cursor() as cursor:
+            # Get article by slug
+            cursor.execute('''
+                SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
+                FROM articles 
+                WHERE slug = %s
+            ''', (slug,))
+            
+            article = cursor.fetchone()
+            
+            if not article:
+                return jsonify({'error': 'Article not found'}), 404
+            
             import json
             images = []
             try:
@@ -1354,8 +1427,8 @@ def get_news_by_category(category):
                     images = json.loads(article[6])
             except:
                 pass
-                
-            article_list.append({
+            
+            article_dict = {
                 'id': article[0],
                 'title': article[1],
                 'title_pt': article[2],
@@ -1369,69 +1442,13 @@ def get_news_by_category(category):
                 'category': article[10],
                 'published_date': article[11],
                 'scraped_at': article[12]
-            })
-        
-        return jsonify({
-            'articles': article_list,
-            'category': category,
-            'count': len(article_list)
-        })
+            }
+            
+            return jsonify(article_dict)
         
     except Exception as e:
-        logger.error(f"Error fetching category {category}: {e}")
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if conn:
-            release_db_connection(conn)
-
-@app.route('/api/news/slug/<slug>', methods=['GET'])
-def get_news_by_slug(slug):
-    """Get a single article by slug"""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Get article by slug
-        cursor.execute('''
-            SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
-            FROM articles 
-            WHERE slug = %s
-        ''', (slug,))
-        
-        article = cursor.fetchone()
-        conn.close()
-        
-        if not article:
-            return jsonify({'error': 'Article not found'}), 404
-        
-        import json
-        images = []
-        try:
-            if article[6]:  # images column
-                images = json.loads(article[6])
-        except:
-            pass
-        
-        article_dict = {
-            'id': article[0],
-            'title': article[1],
-            'title_pt': article[2],
-            'content': article[3],
-            'content_pt': article[4],
-            'image_url': article[5],
-            'images': images,
-            'slug': article[7],
-            'url': article[8],
-            'source': article[9],
-            'category': article[10],
-            'published_date': article[11],
-            'scraped_at': article[12]
-        }
-        
-        return jsonify(article_dict)
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error fetching article by slug {slug}: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to fetch article'}), 500
 
 @app.route('/api/news/refresh', methods=['POST'])
 def refresh_news():
@@ -1444,7 +1461,8 @@ def refresh_news():
             'timestamp': datetime.now().isoformat()
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error refreshing news: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to refresh news'}), 500
 
 @app.route('/api/scheduler/status', methods=['GET'])
 def scheduler_status():
@@ -1465,7 +1483,8 @@ def scheduler_status():
             'total_jobs': len(jobs)
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error fetching scheduler status: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to fetch scheduler status'}), 500
 
 def run_news_job():
     """Background job to fetch and save latest news from multiple sources"""
@@ -1555,22 +1574,26 @@ def run_news_job():
                 cursor.execute('''
                     INSERT INTO articles (title, title_pt, content, content_pt, image_url, images, slug, url, source, category, scraped_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
                 ''', (article['title'], title_pt, article['content'], content_pt, 
                       article.get('image_url'), images_json, slug, article['url'], article['source'], category, now))
                 
+                article_id = cursor.fetchone()[0]
                 processed_count += 1
-                print(f"✅ Added {article['source']}: {article['title'][:50]}... (slug: {slug})")
+                print(f"✅ Added {article['source']}: {article['title'][:50]}... (slug: {slug}, id: {article_id})")
                 
                 # Post to LinkedIn if enabled
                 if LINKEDIN_ENABLED:
                     try:
-                        # Create article data for LinkedIn posting
+                        # Create article data for LinkedIn posting with TejoMag URL
+                        tejomag_url = f"https://tejomag.pt/article/{slug}"
                         linkedin_article = {
                             'title_pt': title_pt,
                             'content_pt': content_pt,
                             'source': article['source'],
                             'category': category,
-                            'url': article['url']
+                            'url': tejomag_url,  # Use TejoMag article URL, not original
+                            'slug': slug
                         }
                         
                         # Post to LinkedIn in a separate thread to avoid blocking
@@ -1580,9 +1603,11 @@ def run_news_job():
                             daemon=True
                         )
                         linkedin_thread.start()
+                        logger.info(f"📱 LinkedIn posting queued for: {title_pt[:50]}... (URL: {tejomag_url})")
                         print(f"📱 LinkedIn posting queued for: {title_pt[:50]}...")
                         
                     except Exception as e:
+                        logger.error(f"❌ Error queuing LinkedIn post: {e}", exc_info=True)
                         print(f"❌ Error queuing LinkedIn post: {e}")
             else:
                 print(f"⏭️  Skipped (already exists): {article['title'][:50]}...")
