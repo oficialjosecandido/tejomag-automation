@@ -1,14 +1,4 @@
 {
-  "routes": [
-    {
-      "route": "/sitemap.xml",
-      "rewrite": "/api/sitemap",
-      "statusCode": 200,
-      "headers": {
-        "Content-Type": "application/xml; charset=utf-8"
-      }
-    }
-  ],
   "navigationFallback": {
     "rewrite": "/index.html",
     "exclude": ["/images/*.{png,jpg,gif}", "/static/*", "*.xml", "/sitemap.xml"]
