@@ -963,8 +963,14 @@ def format_linkedin_post(article):
 def post_to_linkedin(article):
     """Post article to LinkedIn using LinkedIn API"""
     try:
+        logger.info(f"📱 Starting LinkedIn post for: {article.get('title_pt', 'Unknown')[:50]}...")
+        
         if not LINKEDIN_ENABLED:
-            logger.info("LinkedIn posting disabled - missing credentials")
+            logger.warning("⚠️ LinkedIn posting disabled - missing credentials")
+            logger.warning(f"   Client ID: {'set' if LINKEDIN_CLIENT_ID else 'missing'}, "
+                         f"Client Secret: {'set' if LINKEDIN_CLIENT_SECRET else 'missing'}, "
+                         f"Access Token: {'set' if LINKEDIN_ACCESS_TOKEN else 'missing'}, "
+                         f"Person URN: {'set' if LINKEDIN_PERSON_URN else 'missing'}")
             return False
         
         post_text = format_linkedin_post(article)
@@ -1519,10 +1525,13 @@ def run_news_job():
             print("❌ No El Pais articles found")
         
         if not all_articles:
+            logger.warning("❌ No articles found from any source")
             print("❌ No articles found from any source")
             return
         
+        logger.info(f"📰 Total articles found: {len(all_articles)}")
         print(f"📰 Total articles found: {len(all_articles)}")
+        logger.info(f"🔗 LinkedIn posting enabled: {LINKEDIN_ENABLED}")
         
         # Process and save articles
         conn = None
@@ -1532,6 +1541,7 @@ def run_news_job():
             cursor = conn.cursor()
             
             processed_count = 0
+            skipped_count = 0
             for article in all_articles:
                 # Check if article already exists
                 cursor.execute('SELECT id FROM articles WHERE url = %s', (article['url'],))
@@ -1579,39 +1589,44 @@ def run_news_job():
                     ''', (article['title'], title_pt, article['content'], content_pt, 
                           article.get('image_url'), images_json, slug, article['url'], article['source'], category, now))
                     
-                    article_id = cursor.fetchone()[0]
-                    processed_count += 1
-                    print(f"✅ Added {article['source']}: {article['title'][:50]}... (slug: {slug}, id: {article_id})")
-                    
-                    # Post to LinkedIn if enabled
-                    if LINKEDIN_ENABLED:
-                        try:
-                            # Create article data for LinkedIn posting with TejoMag URL
-                            tejomag_url = f"https://tejomag.pt/article/{slug}"
-                            linkedin_article = {
-                                'title_pt': title_pt,
-                                'content_pt': content_pt,
-                                'source': article['source'],
-                                'category': category,
-                                'url': tejomag_url,  # Use TejoMag article URL, not original
-                                'slug': slug
-                            }
-                            
-                            # Post to LinkedIn in a separate thread to avoid blocking
-                            linkedin_thread = threading.Thread(
-                                target=post_to_linkedin,
-                                args=(linkedin_article,),
-                                daemon=True
-                            )
-                            linkedin_thread.start()
-                            logger.info(f"📱 LinkedIn posting queued for: {title_pt[:50]}... (URL: {tejomag_url})")
-                            print(f"📱 LinkedIn posting queued for: {title_pt[:50]}...")
-                            
-                        except Exception as e:
-                            logger.error(f"❌ Error queuing LinkedIn post: {e}", exc_info=True)
-                            print(f"❌ Error queuing LinkedIn post: {e}")
+                article_id = cursor.fetchone()[0]
+                processed_count += 1
+                logger.info(f"✅ Added {article['source']}: {article['title'][:50]}... (slug: {slug}, id: {article_id})")
+                print(f"✅ Added {article['source']}: {article['title'][:50]}... (slug: {slug}, id: {article_id})")
+                
+                # Post to LinkedIn if enabled
+                if LINKEDIN_ENABLED:
+                    try:
+                        # Create article data for LinkedIn posting with TejoMag URL
+                        tejomag_url = f"https://tejomag.pt/article/{slug}"
+                        linkedin_article = {
+                            'title_pt': title_pt,
+                            'content_pt': content_pt,
+                            'source': article['source'],
+                            'category': category,
+                            'url': tejomag_url,  # Use TejoMag article URL, not original
+                            'slug': slug
+                        }
+                        
+                        # Post to LinkedIn in a separate thread to avoid blocking
+                        linkedin_thread = threading.Thread(
+                            target=post_to_linkedin,
+                            args=(linkedin_article,),
+                            daemon=True
+                        )
+                        linkedin_thread.start()
+                        logger.info(f"📱 LinkedIn posting queued for: {title_pt[:50]}... (URL: {tejomag_url})")
+                        print(f"📱 LinkedIn posting queued for: {title_pt[:50]}...")
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Error queuing LinkedIn post: {e}", exc_info=True)
+                        print(f"❌ Error queuing LinkedIn post: {e}")
                 else:
-                    print(f"⏭️  Skipped (already exists): {article['title'][:50]}...")
+                    logger.warning("⚠️ LinkedIn posting is disabled - missing credentials")
+            else:
+                skipped_count += 1
+                logger.info(f"⏭️  Skipped (already exists): {article['title'][:50]}...")
+                print(f"⏭️  Skipped (already exists): {article['title'][:50]}...")
             
             conn.commit()
         except Exception as e:
@@ -1624,9 +1639,11 @@ def run_news_job():
             if conn:
                 release_db_connection(conn)
         
-        print(f"🎉 Scheduled job completed: {processed_count} new articles added from {len(set(article['source'] for article in all_articles))} sources")
+        logger.info(f"🎉 Scheduled job completed: {processed_count} new articles added, {skipped_count} skipped (already exist) from {len(set(article['source'] for article in all_articles))} sources")
+        print(f"🎉 Scheduled job completed: {processed_count} new articles added, {skipped_count} skipped (already exist) from {len(set(article['source'] for article in all_articles))} sources")
         
     except Exception as e:
+        logger.error(f"❌ Error in scheduled job: {e}", exc_info=True)
         print(f"❌ Error in scheduled job: {e}")
 
 def run_scheduler():
