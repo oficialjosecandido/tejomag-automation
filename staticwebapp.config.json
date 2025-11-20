@@ -4,6 +4,14 @@
       "route": "/sitemap",
       "rewrite": "/index.html",
       "statusCode": 200
+    },
+    {
+      "route": "/sitemap2",
+      "rewrite": "/sitemap2.xml",
+      "statusCode": 200,
+      "headers": {
+        "Content-Type": "application/xml; charset=utf-8"
+      }
     }
   ],
   "navigationFallback": {
