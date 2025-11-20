@@ -46,10 +46,8 @@ def get_db_connection():
     if db_pool is None:
         try:
             db_pool = psycopg2.pool.SimpleConnectionPool(
-                1, 20,  # Increased max connections
-                DATABASE_URL,
-                minconn=1,
-                maxconn=20
+                1, 20,  # minconn, maxconn
+                DATABASE_URL
             )
             logger.info("✅ Database connection pool initialized")
         except Exception as e:
@@ -1527,93 +1525,104 @@ def run_news_job():
         print(f"📰 Total articles found: {len(all_articles)}")
         
         # Process and save articles
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        processed_count = 0
-        for article in all_articles:
-            # Check if article already exists
-            cursor.execute('SELECT id FROM articles WHERE url = %s', (article['url'],))
-            existing = cursor.fetchone()
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
             
-            if not existing:
-                # Determine source language for better translation
-                if article['source'] == 'Le Monde':
-                    source_lang = 'fr'
-                elif article['source'] == 'El Pais':
-                    source_lang = 'es'
+            processed_count = 0
+            for article in all_articles:
+                # Check if article already exists
+                cursor.execute('SELECT id FROM articles WHERE url = %s', (article['url'],))
+                existing = cursor.fetchone()
+                
+                if not existing:
+                    # Determine source language for better translation
+                    if article['source'] == 'Le Monde':
+                        source_lang = 'fr'
+                    elif article['source'] == 'El Pais':
+                        source_lang = 'es'
+                    else:
+                        source_lang = 'en'  # Default to English for BBC
+                    
+                    # Translate and store new article
+                    title_pt = translate_to_portuguese(article['title'], source_lang)
+                    content_pt = translate_to_portuguese(article['content'], source_lang)
+                    
+                    # Detect category
+                    category = detect_category(article['title'], article['content'])
+                    
+                    # Generate slug from Portuguese title
+                    slug = generate_slug(title_pt)
+                    
+                    # Ensure slug is unique
+                    counter = 1
+                    original_slug = slug
+                    while True:
+                        cursor.execute('SELECT id FROM articles WHERE slug = %s', (slug,))
+                        if not cursor.fetchone():
+                            break
+                        slug = f"{original_slug}-{counter}"
+                        counter += 1
+                    
+                    # Convert images list to JSON
+                    import json
+                    images_json = json.dumps(article.get('images', []))
+                    
+                    now = datetime.now().isoformat()
+                    
+                    cursor.execute('''
+                        INSERT INTO articles (title, title_pt, content, content_pt, image_url, images, slug, url, source, category, scraped_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id
+                    ''', (article['title'], title_pt, article['content'], content_pt, 
+                          article.get('image_url'), images_json, slug, article['url'], article['source'], category, now))
+                    
+                    article_id = cursor.fetchone()[0]
+                    processed_count += 1
+                    print(f"✅ Added {article['source']}: {article['title'][:50]}... (slug: {slug}, id: {article_id})")
+                    
+                    # Post to LinkedIn if enabled
+                    if LINKEDIN_ENABLED:
+                        try:
+                            # Create article data for LinkedIn posting with TejoMag URL
+                            tejomag_url = f"https://tejomag.pt/article/{slug}"
+                            linkedin_article = {
+                                'title_pt': title_pt,
+                                'content_pt': content_pt,
+                                'source': article['source'],
+                                'category': category,
+                                'url': tejomag_url,  # Use TejoMag article URL, not original
+                                'slug': slug
+                            }
+                            
+                            # Post to LinkedIn in a separate thread to avoid blocking
+                            linkedin_thread = threading.Thread(
+                                target=post_to_linkedin,
+                                args=(linkedin_article,),
+                                daemon=True
+                            )
+                            linkedin_thread.start()
+                            logger.info(f"📱 LinkedIn posting queued for: {title_pt[:50]}... (URL: {tejomag_url})")
+                            print(f"📱 LinkedIn posting queued for: {title_pt[:50]}...")
+                            
+                        except Exception as e:
+                            logger.error(f"❌ Error queuing LinkedIn post: {e}", exc_info=True)
+                            print(f"❌ Error queuing LinkedIn post: {e}")
                 else:
-                    source_lang = 'en'  # Default to English for BBC
-                
-                # Translate and store new article
-                title_pt = translate_to_portuguese(article['title'], source_lang)
-                content_pt = translate_to_portuguese(article['content'], source_lang)
-                
-                # Detect category
-                category = detect_category(article['title'], article['content'])
-                
-                # Generate slug from Portuguese title
-                slug = generate_slug(title_pt)
-                
-                # Ensure slug is unique
-                counter = 1
-                original_slug = slug
-                while True:
-                    cursor.execute('SELECT id FROM articles WHERE slug = %s', (slug,))
-                    if not cursor.fetchone():
-                        break
-                    slug = f"{original_slug}-{counter}"
-                    counter += 1
-                
-                # Convert images list to JSON
-                import json
-                images_json = json.dumps(article.get('images', []))
-                
-                now = datetime.now().isoformat()
-                
-                cursor.execute('''
-                    INSERT INTO articles (title, title_pt, content, content_pt, image_url, images, slug, url, source, category, scraped_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                ''', (article['title'], title_pt, article['content'], content_pt, 
-                      article.get('image_url'), images_json, slug, article['url'], article['source'], category, now))
-                
-                article_id = cursor.fetchone()[0]
-                processed_count += 1
-                print(f"✅ Added {article['source']}: {article['title'][:50]}... (slug: {slug}, id: {article_id})")
-                
-                # Post to LinkedIn if enabled
-                if LINKEDIN_ENABLED:
-                    try:
-                        # Create article data for LinkedIn posting with TejoMag URL
-                        tejomag_url = f"https://tejomag.pt/article/{slug}"
-                        linkedin_article = {
-                            'title_pt': title_pt,
-                            'content_pt': content_pt,
-                            'source': article['source'],
-                            'category': category,
-                            'url': tejomag_url,  # Use TejoMag article URL, not original
-                            'slug': slug
-                        }
-                        
-                        # Post to LinkedIn in a separate thread to avoid blocking
-                        linkedin_thread = threading.Thread(
-                            target=post_to_linkedin,
-                            args=(linkedin_article,),
-                            daemon=True
-                        )
-                        linkedin_thread.start()
-                        logger.info(f"📱 LinkedIn posting queued for: {title_pt[:50]}... (URL: {tejomag_url})")
-                        print(f"📱 LinkedIn posting queued for: {title_pt[:50]}...")
-                        
-                    except Exception as e:
-                        logger.error(f"❌ Error queuing LinkedIn post: {e}", exc_info=True)
-                        print(f"❌ Error queuing LinkedIn post: {e}")
-            else:
-                print(f"⏭️  Skipped (already exists): {article['title'][:50]}...")
-        
-        conn.commit()
-        conn.close()
+                    print(f"⏭️  Skipped (already exists): {article['title'][:50]}...")
+            
+            conn.commit()
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise e
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                release_db_connection(conn)
         
         print(f"🎉 Scheduled job completed: {processed_count} new articles added from {len(set(article['source'] for article in all_articles))} sources")
         
