@@ -2,7 +2,7 @@ User-agent: *
 Allow: /
 
 # Sitemap location
-Sitemap: https://tejomag.pt/sitemap
+Sitemap: https://www.tejomag.pt/sitemap
 
 # Disallow admin or private areas (if any)
 # Disallow: /admin/
