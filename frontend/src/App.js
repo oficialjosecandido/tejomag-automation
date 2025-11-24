@@ -7,6 +7,7 @@ import FichaTecnicaPage from './pages/FichaTecnicaPage';
 import TermosPage from './pages/TermosPage';
 import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
 import SitemapPage from './pages/SitemapPage';
+import NexusPage from './pages/NexusPage';
 import Layout from './components/Layout';
 
 function App() {
@@ -14,6 +15,7 @@ function App() {
     <Router>
       <Routes>
         <Route path="/sitemap" element={<SitemapPage />} />
+        <Route path="/nexus" element={<NexusPage />} />
         <Route path="/" element={<Layout><HomePage /></Layout>} />
         <Route path="/article/:slug" element={<Layout><ArticleDetailPage /></Layout>} />
         <Route path="/quem-somos" element={<Layout><QuemSomosPage /></Layout>} />

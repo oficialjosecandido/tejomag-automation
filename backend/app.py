@@ -1,5 +1,7 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, session
 from flask_cors import CORS
+from functools import wraps
+import hashlib
 import requests
 from bs4 import BeautifulSoup
 import deepl
@@ -17,13 +19,14 @@ import logging
 import json
 
 app = Flask(__name__)
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'tejomag-secret-key-change-in-production-2024')
 CORS(app, origins=[
     'https://tejomag.pt',
     'https://www.tejomag.pt', 
     'https://victorious-hill-04593eb03.2.azurestaticapps.net',
     'http://localhost:3000',
     'http://localhost:3001'
-])
+], supports_credentials=True)
 
 # Global flag to track if app has been initialized
 _app_initialized = False
@@ -118,6 +121,19 @@ LINKEDIN_CLIENT_SECRET = os.getenv('LINKEDIN_CLIENT_SECRET', '')
 LINKEDIN_ACCESS_TOKEN = os.getenv('LINKEDIN_ACCESS_TOKEN', '')
 LINKEDIN_PERSON_URN = os.getenv('LINKEDIN_PERSON_URN', '')  # Your LinkedIn person URN
 LINKEDIN_ENABLED = bool(LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET and LINKEDIN_ACCESS_TOKEN and LINKEDIN_PERSON_URN)
+
+# Admin authentication configuration
+ADMIN_USERNAME = os.getenv('ADMIN_USERNAME', 'admin')
+ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', '')  # Set via environment variable for security
+
+def require_admin(f):
+    """Decorator to require admin authentication"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('admin_logged_in'):
+            return jsonify({'error': 'Authentication required'}), 401
+        return f(*args, **kwargs)
+    return decorated_function
 
 def ensure_app_initialized():
     """Ensure the app is initialized before handling requests"""
@@ -1490,6 +1506,308 @@ def scheduler_status():
     except Exception as e:
         logger.error(f"Error fetching scheduler status: {e}", exc_info=True)
         return jsonify({'error': 'Failed to fetch scheduler status'}), 500
+
+# Admin authentication endpoints
+@app.route('/api/admin/login', methods=['POST'])
+def admin_login():
+    """Admin login endpoint"""
+    try:
+        data = request.get_json()
+        username = data.get('username', '')
+        password = data.get('password', '')
+        
+        if not ADMIN_PASSWORD:
+            logger.warning("⚠️ ADMIN_PASSWORD not set in environment variables")
+            return jsonify({'error': 'Admin authentication not configured'}), 500
+        
+        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+            session['admin_logged_in'] = True
+            session['admin_username'] = username
+            logger.info(f"✅ Admin login successful: {username}")
+            return jsonify({
+                'success': True,
+                'message': 'Login successful',
+                'username': username
+            })
+        else:
+            logger.warning(f"❌ Admin login failed: {username}")
+            return jsonify({'error': 'Invalid credentials'}), 401
+            
+    except Exception as e:
+        logger.error(f"Error during admin login: {e}", exc_info=True)
+        return jsonify({'error': 'Login failed'}), 500
+
+@app.route('/api/admin/logout', methods=['POST'])
+def admin_logout():
+    """Admin logout endpoint"""
+    session.clear()
+    logger.info("✅ Admin logout successful")
+    return jsonify({'success': True, 'message': 'Logout successful'})
+
+@app.route('/api/admin/status', methods=['GET'])
+def admin_status():
+    """Check admin authentication status"""
+    is_authenticated = session.get('admin_logged_in', False)
+    return jsonify({
+        'authenticated': is_authenticated,
+        'username': session.get('admin_username') if is_authenticated else None
+    })
+
+# Admin article management endpoints
+@app.route('/api/admin/articles', methods=['GET'])
+@require_admin
+def admin_list_articles():
+    """Get all articles for admin (with pagination)"""
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 50))
+        offset = (page - 1) * limit
+        
+        with get_db_cursor() as cursor:
+            cursor.execute('SELECT COUNT(*) FROM articles')
+            total_count = cursor.fetchone()[0]
+            
+            cursor.execute('''
+                SELECT id, title, title_pt, content, content_pt, image_url, images, slug, url, source, category, published_date, scraped_at
+                FROM articles 
+                ORDER BY scraped_at DESC
+                LIMIT %s OFFSET %s
+            ''', (limit, offset))
+            
+            articles = []
+            for article in cursor.fetchall():
+                images = []
+                try:
+                    if article[6]:  # images column
+                        images = json.loads(article[6])
+                except:
+                    pass
+                
+                articles.append({
+                    'id': article[0],
+                    'title': article[1],
+                    'title_pt': article[2],
+                    'content': article[3],
+                    'content_pt': article[4],
+                    'image_url': article[5],
+                    'images': images,
+                    'slug': article[7],
+                    'url': article[8],
+                    'source': article[9],
+                    'category': article[10],
+                    'published_date': article[11].isoformat() if article[11] else None,
+                    'scraped_at': article[12].isoformat() if article[12] else None
+                })
+            
+            total_pages = (total_count + limit - 1) // limit
+            
+            return jsonify({
+                'articles': articles,
+                'pagination': {
+                    'current_page': page,
+                    'total_pages': total_pages,
+                    'total_count': total_count,
+                    'limit': limit
+                }
+            })
+            
+    except Exception as e:
+        logger.error(f"Error fetching articles for admin: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to fetch articles'}), 500
+
+@app.route('/api/admin/articles', methods=['POST'])
+@require_admin
+def admin_create_article():
+    """Create a new article (admin only)"""
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['title_pt', 'content_pt', 'source']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+        
+        title_pt = data.get('title_pt', '')
+        content_pt = data.get('content_pt', '')
+        title = data.get('title', title_pt)  # Use Portuguese title as fallback
+        content = data.get('content', content_pt)  # Use Portuguese content as fallback
+        source = data.get('source', 'Manual')
+        category = data.get('category', 'Geral')
+        image_url = data.get('image_url', '')
+        images = data.get('images', [])
+        url = data.get('url', '')
+        
+        # Generate slug from Portuguese title
+        slug = generate_slug(title_pt)
+        
+        with get_db_cursor() as cursor:
+            # Ensure slug is unique
+            counter = 1
+            original_slug = slug
+            while True:
+                cursor.execute('SELECT id FROM articles WHERE slug = %s', (slug,))
+                if not cursor.fetchone():
+                    break
+                slug = f"{original_slug}-{counter}"
+                counter += 1
+            
+            # Convert images list to JSON
+            images_json = json.dumps(images)
+            now = datetime.now().isoformat()
+            
+            cursor.execute('''
+                INSERT INTO articles (title, title_pt, content, content_pt, image_url, images, slug, url, source, category, scraped_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            ''', (title, title_pt, content, content_pt, image_url, images_json, slug, url, source, category, now))
+            
+            result = cursor.fetchone()
+            if result:
+                article_id = result[0]
+                logger.info(f"✅ Admin created article: {title_pt[:50]}... (id: {article_id}, slug: {slug})")
+                
+                # Post to LinkedIn if enabled
+                if LINKEDIN_ENABLED:
+                    try:
+                        tejomag_url = f"https://tejomag.pt/article/{slug}"
+                        linkedin_article = {
+                            'title_pt': title_pt,
+                            'content_pt': content_pt,
+                            'source': source,
+                            'category': category,
+                            'url': tejomag_url,
+                            'slug': slug
+                        }
+                        linkedin_thread = threading.Thread(
+                            target=post_to_linkedin,
+                            args=(linkedin_article,),
+                            daemon=True
+                        )
+                        linkedin_thread.start()
+                        logger.info(f"📱 LinkedIn posting queued for admin-created article: {title_pt[:50]}...")
+                    except Exception as e:
+                        logger.error(f"❌ Error queuing LinkedIn post: {e}", exc_info=True)
+                
+                return jsonify({
+                    'success': True,
+                    'message': 'Article created successfully',
+                    'article': {
+                        'id': article_id,
+                        'slug': slug,
+                        'title_pt': title_pt
+                    }
+                }), 201
+            else:
+                return jsonify({'error': 'Failed to create article'}), 500
+                
+    except IntegrityError as e:
+        logger.error(f"Integrity error creating article: {e}", exc_info=True)
+        return jsonify({'error': 'Article with this slug or URL already exists'}), 409
+    except Exception as e:
+        logger.error(f"Error creating article: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to create article'}), 500
+
+@app.route('/api/admin/articles/<int:article_id>', methods=['PUT'])
+@require_admin
+def admin_update_article(article_id):
+    """Update an existing article (admin only)"""
+    try:
+        data = request.get_json()
+        
+        with get_db_cursor() as cursor:
+            # Check if article exists
+            cursor.execute('SELECT id FROM articles WHERE id = %s', (article_id,))
+            if not cursor.fetchone():
+                return jsonify({'error': 'Article not found'}), 404
+            
+            # Build update query dynamically based on provided fields
+            updates = []
+            values = []
+            
+            if 'title_pt' in data:
+                updates.append('title_pt = %s')
+                values.append(data['title_pt'])
+            if 'content_pt' in data:
+                updates.append('content_pt = %s')
+                values.append(data['content_pt'])
+            if 'title' in data:
+                updates.append('title = %s')
+                values.append(data['title'])
+            if 'content' in data:
+                updates.append('content = %s')
+                values.append(data['content'])
+            if 'category' in data:
+                updates.append('category = %s')
+                values.append(data['category'])
+            if 'image_url' in data:
+                updates.append('image_url = %s')
+                values.append(data['image_url'])
+            if 'images' in data:
+                updates.append('images = %s')
+                values.append(json.dumps(data['images']))
+            if 'url' in data:
+                updates.append('url = %s')
+                values.append(data['url'])
+            
+            if not updates:
+                return jsonify({'error': 'No fields to update'}), 400
+            
+            # If title_pt changed, regenerate slug
+            if 'title_pt' in data:
+                new_slug = generate_slug(data['title_pt'])
+                # Check if new slug is unique (excluding current article)
+                counter = 1
+                original_slug = new_slug
+                while True:
+                    cursor.execute('SELECT id FROM articles WHERE slug = %s AND id != %s', (new_slug, article_id))
+                    if not cursor.fetchone():
+                        break
+                    new_slug = f"{original_slug}-{counter}"
+                    counter += 1
+                updates.append('slug = %s')
+                values.append(new_slug)
+            
+            values.append(article_id)
+            query = f"UPDATE articles SET {', '.join(updates)} WHERE id = %s"
+            cursor.execute(query, values)
+            
+            logger.info(f"✅ Admin updated article: {article_id}")
+            return jsonify({
+                'success': True,
+                'message': 'Article updated successfully'
+            })
+            
+    except IntegrityError as e:
+        logger.error(f"Integrity error updating article: {e}", exc_info=True)
+        return jsonify({'error': 'Update would violate unique constraint'}), 409
+    except Exception as e:
+        logger.error(f"Error updating article: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to update article'}), 500
+
+@app.route('/api/admin/articles/<int:article_id>', methods=['DELETE'])
+@require_admin
+def admin_delete_article(article_id):
+    """Delete an article (admin only)"""
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute('SELECT id, title_pt FROM articles WHERE id = %s', (article_id,))
+            article = cursor.fetchone()
+            
+            if not article:
+                return jsonify({'error': 'Article not found'}), 404
+            
+            cursor.execute('DELETE FROM articles WHERE id = %s', (article_id,))
+            logger.info(f"✅ Admin deleted article: {article_id} - {article[1][:50]}...")
+            
+            return jsonify({
+                'success': True,
+                'message': 'Article deleted successfully'
+            })
+            
+    except Exception as e:
+        logger.error(f"Error deleting article: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to delete article'}), 500
 
 def run_news_job():
     """Background job to fetch and save latest news from multiple sources"""
