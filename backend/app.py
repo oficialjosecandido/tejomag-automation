@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 import deepl
 import psycopg2
 from psycopg2 import pool
+from psycopg2 import IntegrityError
 from contextlib import contextmanager
 import os
 from datetime import datetime
@@ -1548,81 +1549,110 @@ def run_news_job():
                 existing = cursor.fetchone()
                 
                 if not existing:
-                    # Determine source language for better translation
-                    if article['source'] == 'Le Monde':
-                        source_lang = 'fr'
-                    elif article['source'] == 'El Pais':
-                        source_lang = 'es'
-                    else:
-                        source_lang = 'en'  # Default to English for BBC
-                    
-                    # Translate and store new article
-                    title_pt = translate_to_portuguese(article['title'], source_lang)
-                    content_pt = translate_to_portuguese(article['content'], source_lang)
-                    
-                    # Detect category
-                    category = detect_category(article['title'], article['content'])
-                    
-                    # Generate slug from Portuguese title
-                    slug = generate_slug(title_pt)
-                    
-                    # Ensure slug is unique
-                    counter = 1
-                    original_slug = slug
-                    while True:
-                        cursor.execute('SELECT id FROM articles WHERE slug = %s', (slug,))
-                        if not cursor.fetchone():
-                            break
-                        slug = f"{original_slug}-{counter}"
-                        counter += 1
-                    
-                    # Convert images list to JSON
-                    import json
-                    images_json = json.dumps(article.get('images', []))
-                    
-                    now = datetime.now().isoformat()
-                    
-                    cursor.execute('''
-                        INSERT INTO articles (title, title_pt, content, content_pt, image_url, images, slug, url, source, category, scraped_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        RETURNING id
-                    ''', (article['title'], title_pt, article['content'], content_pt, 
-                          article.get('image_url'), images_json, slug, article['url'], article['source'], category, now))
-                    
-                article_id = cursor.fetchone()[0]
-                processed_count += 1
-                logger.info(f"✅ Added {article['source']}: {article['title'][:50]}... (slug: {slug}, id: {article_id})")
-                print(f"✅ Added {article['source']}: {article['title'][:50]}... (slug: {slug}, id: {article_id})")
-                
-                # Post to LinkedIn if enabled
-                if LINKEDIN_ENABLED:
+                    # Use a savepoint for each article insert so failures don't affect others
+                    savepoint_name = f"sp_{processed_count + skipped_count}"
                     try:
-                        # Create article data for LinkedIn posting with TejoMag URL
-                        tejomag_url = f"https://tejomag.pt/article/{slug}"
-                        linkedin_article = {
-                            'title_pt': title_pt,
-                            'content_pt': content_pt,
-                            'source': article['source'],
-                            'category': category,
-                            'url': tejomag_url,  # Use TejoMag article URL, not original
-                            'slug': slug
-                        }
+                        cursor.execute(f"SAVEPOINT {savepoint_name}")
                         
-                        # Post to LinkedIn in a separate thread to avoid blocking
-                        linkedin_thread = threading.Thread(
-                            target=post_to_linkedin,
-                            args=(linkedin_article,),
-                            daemon=True
-                        )
-                        linkedin_thread.start()
-                        logger.info(f"📱 LinkedIn posting queued for: {title_pt[:50]}... (URL: {tejomag_url})")
-                        print(f"📱 LinkedIn posting queued for: {title_pt[:50]}...")
+                        # Determine source language for better translation
+                        if article['source'] == 'Le Monde':
+                            source_lang = 'fr'
+                        elif article['source'] == 'El Pais':
+                            source_lang = 'es'
+                        else:
+                            source_lang = 'en'  # Default to English for BBC
                         
+                        # Translate and store new article
+                        title_pt = translate_to_portuguese(article['title'], source_lang)
+                        content_pt = translate_to_portuguese(article['content'], source_lang)
+                        
+                        # Detect category
+                        category = detect_category(article['title'], article['content'])
+                        
+                        # Generate slug from Portuguese title
+                        slug = generate_slug(title_pt)
+                        
+                        # Ensure slug is unique
+                        counter = 1
+                        original_slug = slug
+                        while True:
+                            cursor.execute('SELECT id FROM articles WHERE slug = %s', (slug,))
+                            if not cursor.fetchone():
+                                break
+                            slug = f"{original_slug}-{counter}"
+                            counter += 1
+                        
+                        # Convert images list to JSON
+                        import json
+                        images_json = json.dumps(article.get('images', []))
+                        
+                        now = datetime.now().isoformat()
+                        
+                        cursor.execute('''
+                            INSERT INTO articles (title, title_pt, content, content_pt, image_url, images, slug, url, source, category, scraped_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            RETURNING id
+                        ''', (article['title'], title_pt, article['content'], content_pt, 
+                              article.get('image_url'), images_json, slug, article['url'], article['source'], category, now))
+                        
+                        result = cursor.fetchone()
+                        if result is None:
+                            logger.warning(f"⚠️ INSERT succeeded but no ID returned for: {article['title'][:50]}...")
+                            cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                            skipped_count += 1
+                            continue
+                        
+                        article_id = result[0]
+                        processed_count += 1
+                        logger.info(f"✅ Added {article['source']}: {article['title'][:50]}... (slug: {slug}, id: {article_id})")
+                        print(f"✅ Added {article['source']}: {article['title'][:50]}... (slug: {slug}, id: {article_id})")
+                        
+                        # Release savepoint on success
+                        cursor.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                        
+                        # Post to LinkedIn if enabled (only after successful insert)
+                        if LINKEDIN_ENABLED:
+                            try:
+                                # Create article data for LinkedIn posting with TejoMag URL
+                                tejomag_url = f"https://tejomag.pt/article/{slug}"
+                                linkedin_article = {
+                                    'title_pt': title_pt,
+                                    'content_pt': content_pt,
+                                    'source': article['source'],
+                                    'category': category,
+                                    'url': tejomag_url,  # Use TejoMag article URL, not original
+                                    'slug': slug
+                                }
+                                
+                                # Post to LinkedIn in a separate thread to avoid blocking
+                                linkedin_thread = threading.Thread(
+                                    target=post_to_linkedin,
+                                    args=(linkedin_article,),
+                                    daemon=True
+                                )
+                                linkedin_thread.start()
+                                logger.info(f"📱 LinkedIn posting queued for: {title_pt[:50]}... (URL: {tejomag_url})")
+                                print(f"📱 LinkedIn posting queued for: {title_pt[:50]}...")
+                                
+                            except Exception as e:
+                                logger.error(f"❌ Error queuing LinkedIn post: {e}", exc_info=True)
+                                print(f"❌ Error queuing LinkedIn post: {e}")
+                        else:
+                            logger.warning("⚠️ LinkedIn posting is disabled - missing credentials")
+                        
+                    except IntegrityError as e:
+                        # Article was inserted between check and INSERT (race condition) or constraint violation
+                        cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                        skipped_count += 1
+                        logger.info(f"⏭️  Skipped (constraint violation/race condition): {article['title'][:50]}... - {str(e)[:100]}")
+                        print(f"⏭️  Skipped (constraint violation/race condition): {article['title'][:50]}...")
+                        continue
                     except Exception as e:
-                        logger.error(f"❌ Error queuing LinkedIn post: {e}", exc_info=True)
-                        print(f"❌ Error queuing LinkedIn post: {e}")
-                else:
-                    logger.warning("⚠️ LinkedIn posting is disabled - missing credentials")
+                        # Catch any other unexpected errors during insert
+                        cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                        logger.error(f"❌ Error inserting article {article['title'][:50]}...: {e}", exc_info=True)
+                        skipped_count += 1
+                        continue
             else:
                 skipped_count += 1
                 logger.info(f"⏭️  Skipped (already exists): {article['title'][:50]}...")
