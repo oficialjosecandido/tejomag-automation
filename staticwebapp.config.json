@@ -6,6 +6,11 @@
       "statusCode": 200
     },
     {
+      "route": "/nexus",
+      "rewrite": "/index.html",
+      "statusCode": 200
+    },
+    {
       "route": "/sitemap2",
       "rewrite": "/sitemap2.xml",
       "statusCode": 200,
