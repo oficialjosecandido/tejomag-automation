@@ -22,6 +22,24 @@ function NexusPage() {
     url: ''
   });
 
+  const fetchArticles = useCallback(async () => {
+    try {
+      const response = await fetch(
+        `${config.API_BASE_URL}/api/admin/articles?page=${pagination.current_page}&limit=20`,
+        { credentials: 'include' }
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setArticles(data.articles);
+        setPagination(data.pagination);
+      } else if (response.status === 401) {
+        setAuthenticated(false);
+      }
+    } catch (error) {
+      console.error('Fetch articles error:', error);
+    }
+  }, [pagination.current_page]);
+
   useEffect(() => {
     checkAuth();
   }, []);
@@ -86,23 +104,6 @@ function NexusPage() {
     }
   };
 
-  const fetchArticles = useCallback(async () => {
-    try {
-      const response = await fetch(
-        `${config.API_BASE_URL}/api/admin/articles?page=${pagination.current_page}&limit=20`,
-        { credentials: 'include' }
-      );
-      if (response.ok) {
-        const data = await response.json();
-        setArticles(data.articles);
-        setPagination(data.pagination);
-      } else if (response.status === 401) {
-        setAuthenticated(false);
-      }
-    } catch (error) {
-      console.error('Fetch articles error:', error);
-    }
-  }, [pagination.current_page]);
 
   const handleCreateArticle = async (e) => {
     e.preventDefault();
