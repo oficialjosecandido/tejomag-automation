@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import config from '../config';
 
 function NexusPage() {
@@ -30,7 +30,7 @@ function NexusPage() {
     if (authenticated) {
       fetchArticles();
     }
-  }, [authenticated, pagination.current_page]);
+  }, [authenticated, fetchArticles]);
 
   const checkAuth = async () => {
     try {
@@ -86,7 +86,7 @@ function NexusPage() {
     }
   };
 
-  const fetchArticles = async () => {
+  const fetchArticles = useCallback(async () => {
     try {
       const response = await fetch(
         `${config.API_BASE_URL}/api/admin/articles?page=${pagination.current_page}&limit=20`,
@@ -102,7 +102,7 @@ function NexusPage() {
     } catch (error) {
       console.error('Fetch articles error:', error);
     }
-  };
+  }, [pagination.current_page]);
 
   const handleCreateArticle = async (e) => {
     e.preventDefault();

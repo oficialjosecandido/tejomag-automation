@@ -102,18 +102,29 @@ def get_db_cursor():
         if conn:
             release_db_connection(conn)
 
-# Initialize DeepL translator
+# Initialize DeepL translators (primary + fallback)
 DEEPL_API_KEY = os.getenv('DEEPL_API_KEY', '')
-translator = None
+DEEPL_API_KEY_2 = os.getenv('DEEPL_API_KEY_2', '')
+translator = None  # Primary translator
+translator_backup = None  # Secondary translator
 
 if DEEPL_API_KEY:
     try:
         translator = deepl.Translator(DEEPL_API_KEY)
-        logger.info("✅ DeepL translator initialized")
+        logger.info("✅ DeepL primary translator initialized")
     except Exception as e:
-        logger.error(f"DeepL initialization failed: {e}")
+        logger.error(f"DeepL primary initialization failed: {e}")
 else:
-    logger.warning("⚠️  No DEEPL_API_KEY found. Translation disabled.")
+    logger.warning("⚠️  No DEEPL_API_KEY found. Primary translation disabled.")
+
+if DEEPL_API_KEY_2:
+    try:
+        translator_backup = deepl.Translator(DEEPL_API_KEY_2)
+        logger.info("✅ DeepL backup translator initialized")
+    except Exception as e:
+        logger.error(f"DeepL backup initialization failed: {e}")
+elif not translator:
+    logger.warning("⚠️  No DEEPL_API_KEY_2 found. Backup translation disabled.")
 
 # LinkedIn API configuration
 LINKEDIN_CLIENT_ID = os.getenv('LINKEDIN_CLIENT_ID', '')
@@ -818,12 +829,40 @@ def scrape_el_pais_article_content(url):
 
 def translate_to_portuguese(text, source_lang='en'):
     """Translate text to Portuguese using DeepL"""
+    def _translate_with_engine(clean_text, translator_engine, engine_label):
+        if not translator_engine:
+            return None
+        try:
+            # DeepL can handle longer texts (max 5000 chars per call)
+            if len(clean_text) > 5000:
+                chunks = [clean_text[i:i+5000] for i in range(0, len(clean_text), 5000)]
+                translated_chunks = []
+                for chunk in chunks:
+                    try:
+                        result = translator_engine.translate_text(
+                            chunk,
+                            source_lang=source,
+                            target_lang='PT-PT'  # European Portuguese
+                        )
+                        translated_chunks.append(result.text)
+                        time.sleep(0.3)
+                    except Exception as chunk_error:
+                        logger.error(f"{engine_label} chunk error: {chunk_error}")
+                        translated_chunks.append(chunk)
+                return ' '.join(translated_chunks)
+            else:
+                result = translator_engine.translate_text(
+                    clean_text,
+                    source_lang=source,
+                    target_lang='PT-PT'  # European Portuguese
+                )
+                return result.text
+        except Exception as e:
+            logger.error(f"{engine_label} translation error: {e}")
+            return None
+
     try:
         if not text or len(text.strip()) == 0:
-            return text
-        
-        if not translator:
-            logger.warning("Translator not initialized, returning original text")
             return text
         
         # Clean and prepare text for translation
@@ -838,33 +877,23 @@ def translate_to_portuguese(text, source_lang='en'):
         }
         source = source_lang_map.get(source_lang.lower(), 'EN')
         
-        # DeepL can handle longer texts
-        if len(text) > 5000:
-            chunks = [text[i:i+5000] for i in range(0, len(text), 5000)]
-            translated_chunks = []
-            for chunk in chunks:
-                try:
-                    result = translator.translate_text(
-                        chunk, 
-                        source_lang=source,
-                        target_lang='PT-PT'  # European Portuguese
-                    )
-                    translated_chunks.append(result.text)
-                    time.sleep(0.3)
-                except Exception as chunk_error:
-                    logger.error(f"Chunk translation error: {chunk_error}")
-                    translated_chunks.append(chunk)
-            return ' '.join(translated_chunks)
-        else:
-            result = translator.translate_text(
-                text,
-                source_lang=source,
-                target_lang='PT-PT'  # European Portuguese
-            )
-            return result.text
+        # Try primary translator first
+        primary_translation = _translate_with_engine(text, translator, "Primary DeepL")
+        if primary_translation:
+            return primary_translation
+        
+        # Fallback to backup translator if available
+        if translator_backup:
+            logger.warning("⚠️ Primary DeepL failed, attempting backup key")
+            backup_translation = _translate_with_engine(text, translator_backup, "Backup DeepL")
+            if backup_translation:
+                return backup_translation
+        
+        logger.warning("⚠️ All DeepL translators failed, returning original text")
+        return text
             
     except Exception as e:
-        logger.error(f"Translation error: {e}")
+        logger.error(f"Translation error (all engines): {e}")
         return text
 
 def post_process_translation(text):
@@ -1200,7 +1229,7 @@ def health_check():
                 'database_type': 'PostgreSQL',
                 'articles_count': article_count,
                 'linkedin_enabled': LINKEDIN_ENABLED,
-                'deepl_enabled': bool(translator)
+                'deepl_enabled': bool(translator or translator_backup)
             })
     except Exception as e:
         logger.error(f"Health check failed: {e}")
