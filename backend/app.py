@@ -133,6 +133,11 @@ LINKEDIN_ACCESS_TOKEN = os.getenv('LINKEDIN_ACCESS_TOKEN', '')
 LINKEDIN_PERSON_URN = os.getenv('LINKEDIN_PERSON_URN', '')  # Your LinkedIn person URN
 LINKEDIN_ENABLED = bool(LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET and LINKEDIN_ACCESS_TOKEN and LINKEDIN_PERSON_URN)
 
+# Instagram API configuration (via Facebook Graph API)
+INSTAGRAM_ACCESS_TOKEN = os.getenv('INSTAGRAM_ACCESS_TOKEN', '')  # Facebook Page Access Token
+INSTAGRAM_BUSINESS_ACCOUNT_ID = os.getenv('INSTAGRAM_BUSINESS_ACCOUNT_ID', '')  # Instagram Business Account ID
+INSTAGRAM_ENABLED = bool(INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_BUSINESS_ACCOUNT_ID)
+
 # Admin authentication configuration
 ADMIN_USERNAME = os.getenv('ADMIN_USERNAME', 'admin')
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', '')  # Set via environment variable for security
@@ -1069,6 +1074,132 @@ def post_to_linkedin(article):
         logger.error(f"Error posting to LinkedIn: {e}", exc_info=True)
         return False
 
+def format_instagram_post(article):
+    """Format article for Instagram posting"""
+    try:
+        title = article.get('title_pt', article.get('title', ''))
+        content = article.get('content_pt', article.get('content', ''))
+        source = article.get('source', '')
+        category = article.get('category', 'Geral')
+        url = article.get('url', '')
+        image_url = article.get('image_url', '')
+        
+        # Instagram caption limit is 2200 characters
+        # Truncate content for Instagram
+        max_content_length = 1000
+        if len(content) > max_content_length:
+            content = content[:max_content_length] + "..."
+        
+        # Create engaging caption
+        caption = f"📰 {title}\n\n{content}\n\n"
+        
+        # Add source and category
+        caption += f"Fonte: {source}\n"
+        caption += f"Categoria: {category}\n\n"
+        
+        # Add relevant hashtags (Instagram allows up to 30 hashtags)
+        hashtags = {
+            'Política': '#Política #Notícias #Portugal #Atualidades',
+            'Economia': '#Economia #Mercados #Finanças #Negócios',
+            'Tecnologia': '#Tecnologia #Inovação #Digital #Tech',
+            'Saúde': '#Saúde #BemEstar #Medicina #Cuidados',
+            'Desporto': '#Desporto #Futebol #Competição #Atletismo',
+            'Cultura': '#Cultura #Arte #Entretenimento #Artes',
+            'Guerra e Conflitos': '#Guerra #Conflitos #Geopolítica #Mundo',
+            'Ambiente': '#Ambiente #Sustentabilidade #Clima #Natureza',
+            'Direitos Humanos': '#DireitosHumanos #Justiça #Igualdade #Direitos',
+            'Ciência': '#Ciência #Investigação #Descobertas #Pesquisa',
+            'Geral': '#Notícias #Informação #Portugal #Mundo'
+        }
+        
+        caption += hashtags.get(category, '#Notícias #Informação #Portugal')
+        caption += "\n\n#TejoMag #InformaçãoAlémDasMargens"
+        
+        # Add link to TejoMag article (Instagram doesn't support clickable links in captions, but we include it)
+        if article.get('slug'):
+            tejomag_url = f"https://tejomag.pt/article/{article['slug']}"
+            caption += f"\n\n🔗 Link na bio: {tejomag_url}"
+        elif url:
+            caption += f"\n\n🔗 Link na bio: {url}"
+        
+        return {
+            'caption': caption,
+            'image_url': image_url
+        }
+        
+    except Exception as e:
+        logger.error(f"Error formatting Instagram post: {e}")
+        return None
+
+def post_to_instagram(article):
+    """Post article to Instagram using Instagram Graph API"""
+    try:
+        logger.info(f"📸 Starting Instagram post for: {article.get('title_pt', 'Unknown')[:50]}...")
+        
+        if not INSTAGRAM_ENABLED:
+            logger.warning("⚠️ Instagram posting disabled - missing credentials")
+            logger.warning(f"   Access Token: {'set' if INSTAGRAM_ACCESS_TOKEN else 'missing'}, "
+                         f"Business Account ID: {'set' if INSTAGRAM_BUSINESS_ACCOUNT_ID else 'missing'}")
+            return False
+        
+        post_data = format_instagram_post(article)
+        if not post_data:
+            logger.error("Failed to format Instagram post")
+            return False
+        
+        caption = post_data['caption']
+        image_url = post_data['image_url']
+        
+        if not image_url:
+            logger.warning("⚠️ No image URL available for Instagram post - Instagram requires an image")
+            return False
+        
+        # Step 1: Create media container
+        create_media_url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_BUSINESS_ACCOUNT_ID}/media"
+        
+        create_media_params = {
+            'image_url': image_url,
+            'caption': caption,
+            'access_token': INSTAGRAM_ACCESS_TOKEN
+        }
+        
+        create_response = requests.post(create_media_url, params=create_media_params, timeout=30)
+        
+        if create_response.status_code != 200:
+            logger.error(f"❌ Instagram media creation failed: {create_response.status_code} - {create_response.text}")
+            return False
+        
+        creation_id = create_response.json().get('id')
+        if not creation_id:
+            logger.error(f"❌ Instagram media creation failed: No creation ID returned - {create_response.text}")
+            return False
+        
+        logger.info(f"📸 Instagram media container created: {creation_id}")
+        
+        # Step 2: Publish the media container
+        # Wait a moment for the container to be ready
+        time.sleep(2)
+        
+        publish_media_url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_BUSINESS_ACCOUNT_ID}/media_publish"
+        
+        publish_media_params = {
+            'creation_id': creation_id,
+            'access_token': INSTAGRAM_ACCESS_TOKEN
+        }
+        
+        publish_response = requests.post(publish_media_url, params=publish_media_params, timeout=30)
+        
+        if publish_response.status_code == 200:
+            logger.info(f"✅ Successfully posted to Instagram: {article.get('title_pt', 'Unknown title')[:50]}...")
+            return True
+        else:
+            logger.error(f"❌ Instagram publishing failed: {publish_response.status_code} - {publish_response.text}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error posting to Instagram: {e}", exc_info=True)
+        return False
+
 def detect_category(title, content):
     """Detect article category based on keywords - focused on specific topics"""
     text = f"{title} {content}".lower()
@@ -1229,6 +1360,7 @@ def health_check():
                 'database_type': 'PostgreSQL',
                 'articles_count': article_count,
                 'linkedin_enabled': LINKEDIN_ENABLED,
+                'instagram_enabled': INSTAGRAM_ENABLED,
                 'deepl_enabled': bool(translator or translator_backup)
             })
     except Exception as e:
@@ -1718,6 +1850,29 @@ def admin_create_article():
                     except Exception as e:
                         logger.error(f"❌ Error queuing LinkedIn post: {e}", exc_info=True)
                 
+                # Post to Instagram if enabled
+                if INSTAGRAM_ENABLED:
+                    try:
+                        tejomag_url = f"https://tejomag.pt/article/{slug}"
+                        instagram_article = {
+                            'title_pt': title_pt,
+                            'content_pt': content_pt,
+                            'source': source,
+                            'category': category,
+                            'url': tejomag_url,
+                            'slug': slug,
+                            'image_url': image_url
+                        }
+                        instagram_thread = threading.Thread(
+                            target=post_to_instagram,
+                            args=(instagram_article,),
+                            daemon=True
+                        )
+                        instagram_thread.start()
+                        logger.info(f"📸 Instagram posting queued for admin-created article: {title_pt[:50]}...")
+                    except Exception as e:
+                        logger.error(f"❌ Error queuing Instagram post: {e}", exc_info=True)
+                
                 return jsonify({
                     'success': True,
                     'message': 'Article created successfully',
@@ -1986,6 +2141,36 @@ def run_news_job():
                                 print(f"❌ Error queuing LinkedIn post: {e}")
                         else:
                             logger.warning("⚠️ LinkedIn posting is disabled - missing credentials")
+                        
+                        # Post to Instagram if enabled
+                        if INSTAGRAM_ENABLED:
+                            try:
+                                # Create article data for Instagram posting
+                                instagram_article = {
+                                    'title_pt': title_pt,
+                                    'content_pt': content_pt,
+                                    'source': article['source'],
+                                    'category': category,
+                                    'url': tejomag_url,
+                                    'slug': slug,
+                                    'image_url': article.get('image_url', '')
+                                }
+                                
+                                # Post to Instagram in a separate thread to avoid blocking
+                                instagram_thread = threading.Thread(
+                                    target=post_to_instagram,
+                                    args=(instagram_article,),
+                                    daemon=True
+                                )
+                                instagram_thread.start()
+                                logger.info(f"📸 Instagram posting queued for: {title_pt[:50]}... (URL: {tejomag_url})")
+                                print(f"📸 Instagram posting queued for: {title_pt[:50]}...")
+                                
+                            except Exception as e:
+                                logger.error(f"❌ Error queuing Instagram post: {e}", exc_info=True)
+                                print(f"❌ Error queuing Instagram post: {e}")
+                        else:
+                            logger.warning("⚠️ Instagram posting is disabled - missing credentials")
                         
                     except IntegrityError as e:
                         # Article was inserted between check and INSERT (race condition) or constraint violation

@@ -6,11 +6,6 @@
       "statusCode": 200
     },
     {
-      "route": "/nexus",
-      "rewrite": "/index.html",
-      "statusCode": 200
-    },
-    {
       "route": "/sitemap2",
       "rewrite": "/sitemap2.xml",
       "statusCode": 200,
@@ -21,7 +16,7 @@
   ],
   "navigationFallback": {
     "rewrite": "/index.html",
-    "exclude": ["/images/*.{png,jpg,gif}", "/static/*", "*.xml"]
+    "exclude": ["/images/*.{png,jpg,gif}", "/static/*", "*.xml", "/sitemap", "/sitemap2"]
   },
   "responseOverrides": {
     "404": {
