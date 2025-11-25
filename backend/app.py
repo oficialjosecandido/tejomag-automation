@@ -884,17 +884,28 @@ def translate_to_portuguese(text, source_lang='en'):
         
         # Try primary translator first
         primary_translation = _translate_with_engine(text, translator, "Primary DeepL")
-        if primary_translation:
+        if primary_translation and primary_translation != text:
+            logger.info(f"✅ Translation successful (Primary DeepL): {source_lang} → PT-PT")
+            logger.info(f"   Original sample: {text[:100]}...")
+            logger.info(f"   Translated sample: {primary_translation[:100]}...")
             return primary_translation
+        elif primary_translation == text:
+            logger.warning(f"⚠️ Translation returned original text (Primary DeepL) - may not have translated")
         
         # Fallback to backup translator if available
         if translator_backup:
-            logger.warning("⚠️ Primary DeepL failed, attempting backup key")
+            logger.warning("⚠️ Primary DeepL failed or returned original, attempting backup key")
             backup_translation = _translate_with_engine(text, translator_backup, "Backup DeepL")
-            if backup_translation:
+            if backup_translation and backup_translation != text:
+                logger.info(f"✅ Translation successful (Backup DeepL): {source_lang} → PT-PT")
+                logger.info(f"   Original sample: {text[:100]}...")
+                logger.info(f"   Translated sample: {backup_translation[:100]}...")
                 return backup_translation
+            elif backup_translation == text:
+                logger.warning(f"⚠️ Translation returned original text (Backup DeepL) - may not have translated")
         
-        logger.warning("⚠️ All DeepL translators failed, returning original text")
+        logger.warning(f"⚠️ All DeepL translators failed, returning original text (source: {source_lang})")
+        logger.warning(f"   Text length: {len(text)} chars")
         return text
             
     except Exception as e:
@@ -1064,10 +1075,18 @@ def post_to_linkedin(article):
         )
         
         if response.status_code == 201:
-            logger.info(f"✅ Successfully posted to LinkedIn: {article.get('title_pt', 'Unknown title')[:50]}...")
+            post_id = response.headers.get('X-RestLi-Id', 'unknown')
+            logger.info(f"✅ Successfully posted to LinkedIn!")
+            logger.info(f"   Article: {article.get('title_pt', 'Unknown title')[:50]}...")
+            logger.info(f"   Post ID: {post_id}")
+            logger.info(f"   URL: {article.get('url', 'N/A')}")
             return True
         else:
-            logger.error(f"❌ LinkedIn posting failed: {response.status_code} - {response.text}")
+            error_details = response.text[:200] if response.text else "No error details"
+            logger.error(f"❌ LinkedIn posting failed!")
+            logger.error(f"   Status Code: {response.status_code}")
+            logger.error(f"   Article: {article.get('title_pt', 'Unknown title')[:50]}...")
+            logger.error(f"   Error: {error_details}")
             return False
             
     except Exception as e:
@@ -2065,8 +2084,19 @@ def run_news_job():
                             source_lang = 'en'  # Default to English for BBC
                         
                         # Translate and store new article
+                        logger.info(f"🌐 Translating article from {source_lang.upper()}: {article['title'][:50]}...")
                         title_pt = translate_to_portuguese(article['title'], source_lang)
                         content_pt = translate_to_portuguese(article['content'], source_lang)
+                        
+                        # Log translation status
+                        title_translated = title_pt != article['title']
+                        content_translated = content_pt != article['content']
+                        if title_translated and content_translated:
+                            logger.info(f"✅ Article fully translated to Portuguese")
+                        elif title_translated or content_translated:
+                            logger.warning(f"⚠️ Article partially translated (title: {title_translated}, content: {content_translated})")
+                        else:
+                            logger.error(f"❌ Article NOT translated - both title and content are original")
                         
                         # Detect category
                         category = detect_category(article['title'], article['content'])
@@ -2107,6 +2137,8 @@ def run_news_job():
                         article_id = result[0]
                         processed_count += 1
                         logger.info(f"✅ Added {article['source']}: {article['title'][:50]}... (slug: {slug}, id: {article_id})")
+                        logger.info(f"   Translation status: Title={'✅' if title_translated else '❌'}, Content={'✅' if content_translated else '❌'}")
+                        logger.info(f"   Portuguese title: {title_pt[:60]}...")
                         print(f"✅ Added {article['source']}: {article['title'][:50]}... (slug: {slug}, id: {article_id})")
                         
                         # Release savepoint on success
@@ -2139,6 +2171,8 @@ def run_news_job():
                             except Exception as e:
                                 logger.error(f"❌ Error queuing LinkedIn post: {e}", exc_info=True)
                                 print(f"❌ Error queuing LinkedIn post: {e}")
+                        else:
+                            logger.info(f"ℹ️ LinkedIn posting skipped - not enabled or credentials missing")
                         else:
                             logger.warning("⚠️ LinkedIn posting is disabled - missing credentials")
                         
@@ -2202,6 +2236,14 @@ def run_news_job():
                 release_db_connection(conn)
         
         logger.info(f"🎉 Scheduled job completed: {processed_count} new articles added, {skipped_count} skipped (already exist) from {len(set(article['source'] for article in all_articles))} sources")
+        logger.info(f"📊 Job Summary:")
+        logger.info(f"   - Articles processed: {len(all_articles)}")
+        logger.info(f"   - New articles added: {processed_count}")
+        logger.info(f"   - Articles skipped: {skipped_count}")
+        logger.info(f"   - Sources: {', '.join(set(article['source'] for article in all_articles))}")
+        logger.info(f"   - LinkedIn enabled: {LINKEDIN_ENABLED}")
+        logger.info(f"   - Instagram enabled: {INSTAGRAM_ENABLED}")
+        logger.info(f"   - DeepL enabled: {bool(translator or translator_backup)}")
         print(f"🎉 Scheduled job completed: {processed_count} new articles added, {skipped_count} skipped (already exist) from {len(set(article['source'] for article in all_articles))} sources")
         
     except Exception as e:
