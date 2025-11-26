@@ -2172,8 +2172,6 @@ def run_news_job():
                                 logger.error(f"❌ Error queuing LinkedIn post: {e}", exc_info=True)
                                 print(f"❌ Error queuing LinkedIn post: {e}")
                         else:
-                            logger.info(f"ℹ️ LinkedIn posting skipped - not enabled or credentials missing")
-                        else:
                             logger.warning("⚠️ LinkedIn posting is disabled - missing credentials")
                         
                         # Post to Instagram if enabled

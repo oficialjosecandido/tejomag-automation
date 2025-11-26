@@ -36,10 +36,11 @@ AUTHORIZATION_URL = "https://www.linkedin.com/oauth/v2/authorization"
 TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken"
 
 # Required scopes for posting
+# Note: r_liteprofile and r_basicprofile are deprecated by LinkedIn
+# We only need w_member_social for posting, but Person URN must be obtained manually
 SCOPES = [
-    "w_member_social",  # Required for posting
-    "r_liteprofile",    # Required to get profile info
-    "r_basicprofile"    # Required to get profile info
+    "w_member_social",   # Required for posting content to LinkedIn
+    "r_liteprofile"      # Needed so /v2/me can return your person ID
 ]
 
 class CallbackHandler(BaseHTTPRequestHandler):
@@ -54,7 +55,7 @@ class CallbackHandler(BaseHTTPRequestHandler):
             params = urllib.parse.parse_qs(query_params)
             
             if 'code' in params:
-                self.auth_code = params['code'][0]
+                CallbackHandler.auth_code = params['code'][0]  # Set class variable, not instance
                 self.send_response(200)
                 self.send_header('Content-type', 'text/html')
                 self.end_headers()
@@ -96,6 +97,7 @@ def get_access_token(auth_code):
     """Exchange authorization code for access token"""
     print("\n🔄 Exchanging authorization code for access token...")
     
+    # LinkedIn OAuth 2.0 token exchange - include all parameters in body
     token_data = {
         'grant_type': 'authorization_code',
         'code': auth_code,
@@ -104,7 +106,11 @@ def get_access_token(auth_code):
         'client_secret': CLIENT_SECRET
     }
     
-    response = requests.post(TOKEN_URL, data=token_data)
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded'
+    }
+    
+    response = requests.post(TOKEN_URL, data=token_data, headers=headers)
     
     if response.status_code == 200:
         token_info = response.json()
@@ -127,28 +133,92 @@ def get_person_urn(access_token):
     }
     
     # Get current user's profile
-    response = requests.get('https://api.linkedin.com/v2/me', headers=headers)
-    
-    if response.status_code == 200:
-        profile = response.json()
-        person_id = profile.get('id')
+    # Try to get Person URN from token introspection or user info
+    # With w_member_social scope, we can use the token to get user info
+    try:
+        # Try the /v2/userInfo endpoint (works with w_member_social)
+        response = requests.get('https://api.linkedin.com/v2/userInfo', headers=headers)
         
-        if person_id:
-            person_urn = f"urn:li:person:{person_id}"
-            print(f"✅ Person URN obtained!")
-            print(f"\n📋 Your LinkedIn Credentials:")
-            print(f"=" * 60)
-            print(f"Person ID: {person_id}")
-            print(f"Person URN: {person_urn}")
-            print(f"=" * 60)
-            return person_urn, person_id
+        if response.status_code == 200:
+            user_info = response.json()
+            # The sub field contains the person ID
+            person_id = user_info.get('sub') or user_info.get('id')
+            
+            if person_id:
+                # Remove 'urn:li:person:' prefix if present
+                if person_id.startswith('urn:li:person:'):
+                    person_id = person_id.replace('urn:li:person:', '')
+                
+                person_urn = f"urn:li:person:{person_id}"
+                print(f"✅ Person URN obtained!")
+                print(f"\n📋 Your LinkedIn Credentials:")
+                print(f"=" * 60)
+                print(f"Person ID: {person_id}")
+                print(f"Person URN: {person_urn}")
+                print(f"=" * 60)
+                return person_urn, person_id
+            else:
+                print("⚠️  Could not extract Person ID from userInfo")
+                print(f"Response: {user_info}")
+                print("\n💡 You may need to manually find your Person URN.")
+                print("   Check your LinkedIn profile URL or use LinkedIn's API explorer.")
+                return None, None
         else:
-            print("❌ Could not find 'id' in profile response")
-            print(f"Response: {profile}")
+            # Fallback: try /v2/me endpoint with projection (as per LinkedIn docs)
+            print(f"⚠️  /v2/userInfo failed ({response.status_code}), trying /v2/me?projection=(id)...")
+            response = requests.get('https://api.linkedin.com/v2/me?projection=(id)', headers=headers)
+            
+            if response.status_code == 200:
+                profile = response.json()
+                person_id = profile.get('id')
+                
+                if person_id:
+                    person_urn = f"urn:li:person:{person_id}"
+                    print(f"✅ Person URN obtained via /v2/me!")
+                    print(f"\n📋 Your LinkedIn Credentials:")
+                    print(f"=" * 60)
+                    print(f"Person ID: {person_id}")
+                    print(f"Person URN: {person_urn}")
+                    print(f"=" * 60)
+                    return person_urn, person_id
+            
+            # Try without projection as last resort
+            print(f"⚠️  /v2/me?projection=(id) failed ({response.status_code}), trying /v2/me...")
+            response = requests.get('https://api.linkedin.com/v2/me', headers=headers)
+            
+            if response.status_code == 200:
+                profile = response.json()
+                person_id = profile.get('id')
+                
+                if person_id:
+                    person_urn = f"urn:li:person:{person_id}"
+                    print(f"✅ Person URN obtained via /v2/me!")
+                    print(f"\n📋 Your LinkedIn Credentials:")
+                    print(f"=" * 60)
+                    print(f"Person ID: {person_id}")
+                    print(f"Person URN: {person_urn}")
+                    print(f"=" * 60)
+                    return person_urn, person_id
+            
+            print(f"❌ Failed to get Person URN: {response.status_code}")
+            print(f"Response: {response.text}")
+            print("\n" + "=" * 60)
+            print("💡 MANUAL METHOD: Get Person URN via LinkedIn API Explorer")
+            print("=" * 60)
+            print("Since r_liteprofile is deprecated, use this method:")
+            print("\n1. Go to: https://www.linkedin.com/developers/tools/apitools/api-explorer")
+            print("2. Select your app 'TejoMag'")
+            print("3. Click 'Authorize' (use the same account you authorized in the script)")
+            print("4. In the endpoint dropdown, select: GET /v2/me")
+            print("5. Click 'Send request'")
+            print("6. Look for the 'id' field in the JSON response")
+            print("7. Your Person URN will be: urn:li:person:{id}")
+            print("\n   Example: If id is 'YrZCpj2Z12', URN is 'urn:li:person:YrZCpj2Z12'")
+            print("=" * 60)
             return None, None
-    else:
-        print(f"❌ Failed to get profile: {response.status_code}")
-        print(f"Response: {response.text}")
+    except Exception as e:
+        print(f"❌ Error getting Person URN: {e}")
+        print("\n💡 You may need to manually find your Person URN.")
         return None, None
 
 def main():
@@ -227,19 +297,27 @@ def main():
     
     # Step 5: Get Person URN
     person_urn, person_id = get_person_urn(access_token)
-    if not person_urn:
-        return
     
     # Step 6: Display results
     print("\n" + "=" * 60)
-    print("✅ SUCCESS! Here are your credentials:")
+    if person_urn:
+        print("✅ SUCCESS! Here are your credentials:")
+    else:
+        print("✅ Access Token obtained!")
+        print("⚠️  Person URN must be obtained manually (see instructions above)")
     print("=" * 60)
-    print(f"\n🔑 Access Token:")
+    print(f"\n🔑 Access Token (save this!):")
     print(f"   {access_token}")
-    print(f"\n👤 Person URN (full format):")
-    print(f"   {person_urn}")
-    print(f"\n📝 Person ID (use this in env var):")
-    print(f"   {person_id}")
+    if person_urn:
+        print(f"\n👤 Person URN (full format):")
+        print(f"   {person_urn}")
+        print(f"\n📝 Person ID (use this in env var):")
+        print(f"   {person_id}")
+    else:
+        print(f"\n📋 Next Steps:")
+        print(f"   1. Use the Access Token above")
+        print(f"   2. Get Person URN via LinkedIn API Explorer (see instructions above)")
+        print(f"   3. Add both to Azure environment variables")
     print("\n" + "=" * 60)
     print("\n📋 Add these to your environment variables:")
     print("=" * 60)
