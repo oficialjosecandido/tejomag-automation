@@ -1051,7 +1051,7 @@ def post_to_linkedin(article):
         
         # Prepare the post data
         post_data = {
-            "author": f"urn:li:person:{LINKEDIN_PERSON_URN}",
+            "author": f"urn:li:member:{LINKEDIN_PERSON_URN}",
             "lifecycleState": "PUBLISHED",
             "specificContent": {
                 "com.linkedin.ugc.ShareContent": {
