@@ -1344,9 +1344,34 @@ def get_news():
     except ValueError as e:
         logger.error(f"Invalid pagination parameters: {e}")
         return jsonify({'error': 'Invalid pagination parameters'}), 400
+    except psycopg2.Error as e:
+        # Database errors - return empty result instead of 500 to avoid Search Console errors
+        logger.error(f"Database error fetching news: {e}", exc_info=True)
+        return jsonify({
+            'articles': [],
+            'pagination': {
+                'current_page': 1,
+                'total_pages': 1,
+                'total_count': 0,
+                'limit': 50,
+                'has_next': False,
+                'has_prev': False
+            }
+        }), 200
     except Exception as e:
+        # Other errors - return empty result instead of 500
         logger.error(f"Error fetching news: {e}", exc_info=True)
-        return jsonify({'error': 'Failed to fetch news articles'}), 500
+        return jsonify({
+            'articles': [],
+            'pagination': {
+                'current_page': 1,
+                'total_pages': 1,
+                'total_count': 0,
+                'limit': 50,
+                'has_next': False,
+                'has_prev': False
+            }
+        }), 200
 
 @app.route('/', methods=['GET'])
 def root():
@@ -1500,11 +1525,13 @@ def sitemap():
     
     try:
         with get_db_cursor() as cursor:
-            # Get all articles with slugs
+            # Get all articles with valid slugs (non-null, non-empty)
             cursor.execute('''
                 SELECT slug, scraped_at
                 FROM articles
-                WHERE slug IS NOT NULL
+                WHERE slug IS NOT NULL 
+                  AND slug != ''
+                  AND LENGTH(TRIM(slug)) > 0
                 ORDER BY scraped_at DESC
             ''')
             
@@ -1514,18 +1541,22 @@ def sitemap():
             xml = ['<?xml version="1.0" encoding="UTF-8"?>']
             xml.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
             
-            # Add homepage
+            # Add homepage (use www for consistency)
             xml.append('  <url>')
-            xml.append('    <loc>https://tejomag.pt/</loc>')
+            xml.append('    <loc>https://www.tejomag.pt/</loc>')
             xml.append('    <lastmod>' + datetime.now().strftime('%Y-%m-%d') + '</lastmod>')
             xml.append('    <changefreq>hourly</changefreq>')
             xml.append('    <priority>1.0</priority>')
             xml.append('  </url>')
             
-            # Add all article pages
+            # Add all article pages (only include articles with valid slugs)
             for article in articles:
                 slug = article[0]
                 scraped_at = article[1]
+                
+                # Skip if slug is None or empty
+                if not slug or not slug.strip():
+                    continue
                 
                 # Format date
                 if scraped_at:
@@ -1534,7 +1565,7 @@ def sitemap():
                     lastmod = datetime.now().strftime('%Y-%m-%d')
                 
                 xml.append('  <url>')
-                xml.append(f'    <loc>https://tejomag.pt/article/{slug}</loc>')
+                xml.append(f'    <loc>https://www.tejomag.pt/article/{slug}</loc>')
                 xml.append(f'    <lastmod>{lastmod}</lastmod>')
                 xml.append('    <changefreq>weekly</changefreq>')
                 xml.append('    <priority>0.8</priority>')
@@ -1549,8 +1580,21 @@ def sitemap():
             return response
             
     except Exception as e:
-        logger.error(f"Sitemap generation error: {e}")
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Sitemap generation error: {e}", exc_info=True)
+        # Return empty sitemap instead of 500 to avoid Search Console errors
+        xml = ['<?xml version="1.0" encoding="UTF-8"?>']
+        xml.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
+        xml.append('  <url>')
+        xml.append('    <loc>https://www.tejomag.pt/</loc>')
+        xml.append('    <lastmod>' + datetime.now().strftime('%Y-%m-%d') + '</lastmod>')
+        xml.append('    <changefreq>hourly</changefreq>')
+        xml.append('    <priority>1.0</priority>')
+        xml.append('  </url>')
+        xml.append('</urlset>')
+        response = Response('\n'.join(xml), mimetype='application/xml')
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Content-Type'] = 'application/xml; charset=utf-8'
+        return response
 
 @app.route('/api/news/category/<category>', methods=['GET'])
 def get_news_by_category(category):
@@ -1647,9 +1691,14 @@ def get_news_by_slug(slug):
             
             return jsonify(article_dict)
         
+    except psycopg2.Error as e:
+        # Database errors - log but return 404 to avoid 5xx errors in Search Console
+        logger.error(f"Database error fetching article by slug {slug}: {e}", exc_info=True)
+        return jsonify({'error': 'Article not found'}), 404
     except Exception as e:
+        # Other errors - log but return 404 to avoid 5xx errors
         logger.error(f"Error fetching article by slug {slug}: {e}", exc_info=True)
-        return jsonify({'error': 'Failed to fetch article'}), 500
+        return jsonify({'error': 'Article not found'}), 404
 
 @app.route('/api/news/refresh', methods=['POST'])
 def refresh_news():
